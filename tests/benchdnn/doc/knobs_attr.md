@@ -5,9 +5,7 @@
     --attr-scratchpad=MODE
     --attr-fpmath=MATHMODE[:APPLY_TO_INT]
     --attr-acc-mode=ACCMODE
-    --attr-rounding-mode=ARG:MODE[+...]
     --attr-deterministic=BOOL
-    --attr-dropout=PROBABILITY[:SEED[:TAG]]
     --attr-scales=ARG:POLICY[:SCALE[:DATA_TYPE[:GROUPS]]][+...]
     --attr-zero-points=ARG:POLICY[:ZEROPOINT[:DATA_TYPE[:GROUPS]]][+...]
     --attr-post-ops=SUM[:SCALE[:ZERO_POINT[:DATA_TYPE]]]
@@ -40,38 +38,12 @@ for details.
 [accumulation mode primitive attribute](https://oneapi-src.github.io/oneDNN/dev_guide_attributes_accumulation_mode.html)
 for details.
 
-## --attr-rounding-mode
-`--attr-rounding-mode` specifies the rounding mode to be used for benchmarking.
-`ARG` specifies which memory argument will be modified. Supported values are:
-  - `dst` corresponds to `DNNL_ARG_DST`.
-  - `diff_src` corresponds to `DNNL_ARG_DIFF_SRC`.
-  - `diff_weights` corresponds to `DNNL_ARG_DIFF_WEIGHTS`.
-`MODE` specifies which mode to apply to the corresponding memory
-argument. Supported values are: `environment` (default) and `stochastic`.  Refer
-to [rounding mode primitive attribute](https://oneapi-src.github.io/oneDNN/dev_guide_attributes_rounding_mode.html)
-for details.
-
 ## --attr-deterministic
 `--attr-deterministic` specifies the deterministic mode to be used for
 benchmarking. `BOOL` values can be `true`, which enables the deterministic
 mode and `false` (the default), which disables it. Refer to
 [deterministic primitive attribute](https://oneapi-src.github.io/oneDNN/dev_guide_attributes_deterministic.html)
 for details.
-
-## --attr-dropout
-`--attr-dropout` defines the dropout attribute; right before the post-ops get
-applied, dropout fills a part of the output buffer with zeroes at random offsets
-(using a version of Philox as PRNG) and divides what's left by (1 - p), where p
-means probability, see below.
-`PROBABILITY` is a floating-point value between `0` and `1` that specifies how
-likely it is for any given output value to be zeroed (i.e. 'dropped out'): when
-`0` is specified the output buffer is to remain intact, when `1` is specified
-all output values are to be dropped out.
-`SEED` is the 32-bit integer seed of the RNG (a modified Philox algorithm
-adapted for GPUs), 0 by default.
-`TAG` specifies the memory format of the output buffer where the dropout mask
-will be stored. `TAG` values use the same notation as in drivers. The default
-value of `TAG` is `any`. Refer to [tags](knobs_tag.md) for details.
 
 ## --attr-scales
 `--attr-scales` defines per memory argument primitive scales attribute.
@@ -150,7 +122,7 @@ value which is passed for execution at runtime. Specifying a value for any other
 policies will trigger an error.
 
 `DATA_TYPE` specifies data type for zero points. Supported values are
-`s32` (the default), `s8`, `u8`, `s4`, `u4`.
+`s32` (the default), `s8`, `u8`.
 
 `GROUPS` specifies how zero points are grouped along dimensions where multiple
 zero points factors are used.

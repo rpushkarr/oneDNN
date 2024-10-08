@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -31,12 +31,6 @@ static const size_t DNNL_CPU_MEMALIGNMENT = 64;
 static const size_t DNNL_SYCL_MEMALIGNMENT = 64;
 #endif
 
-#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
-#include "xpu/ocl/engine_factory.hpp"
-static const size_t DNNL_OCL_MEMALIGNMENT = 0;
-using namespace dnnl::impl::gpu::intel::ocl;
-#endif
-
 using namespace dnnl::impl::graph;
 
 static void *tensor_malloc(
@@ -60,18 +54,12 @@ static void *tensor_malloc(
     } else if (eng->kind() == engine_kind::gpu) {
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL
         return alc->allocate(size, *dev, *ctx, {type, DNNL_SYCL_MEMALIGNMENT});
-#elif DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
-        auto *ocl_engine = utils::downcast<const ocl_gpu_engine_t *>(eng);
-        const cl_device_id &ocl_dev = ocl_engine->device();
-        const cl_context &ocl_ctx = ocl_engine->context();
-        return alc->allocate(
-                size, ocl_dev, ocl_ctx, {type, DNNL_OCL_MEMALIGNMENT});
 #else
-        assertm(false, "Unsupported gpu runtime");
+        assertm(false, "Don't support other runtime for gpu!");
         return nullptr;
 #endif
     } else {
-        assertm(false, "Unsupported engine kind");
+        assertm(false, "Wrong engine kind to allocate memory for a tensor");
         return nullptr;
     }
 }
@@ -96,16 +84,11 @@ static void tensor_free(void *p, const engine_t *eng) {
     } else if (eng->kind() == engine_kind::gpu) {
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL
         alc->deallocate(p, *dev, *ctx, {});
-#elif DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
-        auto *ocl_engine = utils::downcast<const ocl_gpu_engine_t *>(eng);
-        const cl_device_id &ocl_dev = ocl_engine->device();
-        const cl_context &ocl_ctx = ocl_engine->context();
-        return alc->deallocate(p, ocl_dev, ocl_ctx, {});
 #else
-        assertm(false, "Unsupported gpu runtime");
+        assertm(false, "Don't support other runtime for gpu!");
 #endif
     } else {
-        assertm(false, "Unsupported engine kind");
+        assertm(false, "Wrong engine kind to deallocate memory for a tensor");
     }
 }
 
@@ -168,14 +151,5 @@ status_t DNNL_API dnnl_graph_tensor_get_engine(
 
     *engine = const_cast<engine_t *>(tensor->get_engine());
 
-    return status::success;
-}
-
-dnnl_status_t DNNL_API dnnl_graph_tensor_get_logical_tensor(
-        const tensor_t *tensor, logical_tensor_t *logical_tensor) {
-    if (utils::any_null(tensor, logical_tensor))
-        return status::invalid_arguments;
-
-    *logical_tensor = tensor->get_logical_tensor();
     return status::success;
 }

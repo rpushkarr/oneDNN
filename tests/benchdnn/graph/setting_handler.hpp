@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2024 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -26,7 +26,6 @@
 #include "custom_driver.hpp"
 #include "deconv/deconv.hpp"
 #include "eltwise/eltwise.hpp"
-#include "gnorm/gnorm.hpp"
 #include "lnorm/lnorm.hpp"
 #include "matmul/matmul.hpp"
 #include "pool/pool.hpp"
@@ -40,8 +39,8 @@ namespace graph {
 
 #define DECLARE_GET_SETTING(driver) \
     namespace driver { \
-    ::driver::settings_t get_setting( \
-            const deserialized_op &base_op_ref, res_t *res); \
+    ::driver::settings_t get_setting(const deserialized_op &base_op_ref, \
+            const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res); \
     }
 
 DECLARE_GET_SETTING(binary);
@@ -51,7 +50,6 @@ DECLARE_GET_SETTING(conv);
 DECLARE_GET_SETTING(custom);
 DECLARE_GET_SETTING(deconv);
 DECLARE_GET_SETTING(eltwise);
-DECLARE_GET_SETTING(gnorm);
 DECLARE_GET_SETTING(lnorm);
 DECLARE_GET_SETTING(matmul);
 DECLARE_GET_SETTING(pool);
@@ -67,7 +65,8 @@ using req = typename std::enable_if<B, bool>::type;
 #define DECLARE_TEMPLATE_GET_SETTING(driver) \
     template <typename setting_t, \
             req<std::is_same<setting_t, ::driver::settings_t>::value> = true> \
-    setting_t get_setting(const deserialized_op &base_op_ref, res_t *res) { \
+    setting_t get_setting(const deserialized_op &base_op_ref, \
+            const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) { \
         deserialized_op base_op = base_op_ref; \
         for (size_t i = 0; i < base_op.in_lts_.size(); i++) { \
             if (base_op.in_lts_[i].shape_.size() == 0) \
@@ -81,7 +80,7 @@ using req = typename std::enable_if<B, bool>::type;
             if (base_op.out_lts_[i].stride_.size() == 0) \
                 base_op.out_lts_[i].stride_.emplace_back(1); \
         } \
-        return driver::get_setting(base_op, res); \
+        return driver::get_setting(base_op, rewrite_lt_ids, res); \
     }
 
 // template to generate driver settings
@@ -92,7 +91,6 @@ DECLARE_TEMPLATE_GET_SETTING(conv);
 DECLARE_TEMPLATE_GET_SETTING(custom);
 DECLARE_TEMPLATE_GET_SETTING(deconv);
 DECLARE_TEMPLATE_GET_SETTING(eltwise);
-DECLARE_TEMPLATE_GET_SETTING(gnorm);
 DECLARE_TEMPLATE_GET_SETTING(lnorm);
 DECLARE_TEMPLATE_GET_SETTING(matmul);
 DECLARE_TEMPLATE_GET_SETTING(pool);

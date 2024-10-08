@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,12 +17,12 @@
 #ifndef GPU_GPU_RESOURCE_HPP
 #define GPU_GPU_RESOURCE_HPP
 
-#include <memory>
-#include <unordered_map>
+#include "oneapi/dnnl/dnnl.h"
 
 #include "common/c_types_map.hpp"
+#include "common/primitive.hpp"
 #include "common/resource.hpp"
-#include "common/utils.hpp"
+#include "gpu/compute/compute.hpp"
 
 namespace dnnl {
 namespace impl {

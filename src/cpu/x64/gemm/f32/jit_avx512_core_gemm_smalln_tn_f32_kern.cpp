@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -22,9 +22,6 @@
 #include "common/utils.hpp"
 
 #include "cpu/platform.hpp"
-
-#include "cpu/gemm/gemm.hpp"
-
 #include "cpu/x64/gemm/f32/jit_avx512_core_gemm_smalln_tn_f32_kern.hpp"
 #include "cpu/x64/gemm/gemm_info.hpp"
 #include "cpu/x64/jit_generator.hpp"
@@ -46,8 +43,13 @@ namespace avx512_core_gemm_smalln_tn_f32 {
 struct xbyak_gemm_smalln_tn_t : public jit_generator {
     DECLARE_CPU_JIT_AUX_FUNCTIONS(jit_avx512_core_gemm_smalln_tn_xbyak_gemm)
 
-    xbyak_gemm_smalln_tn_t(int N, float beta, float alpha)
-        : jit_generator(jit_name()), N(N), beta(beta), alpha(alpha) {}
+    xbyak_gemm_smalln_tn_t(int N, float beta, float alpha,
+            void *code_ptr = nullptr,
+            size_t code_size = 80 * Xbyak::DEFAULT_MAX_CODE_SIZE)
+        : jit_generator(jit_name(), code_ptr, code_size)
+        , N(N)
+        , beta(beta)
+        , alpha(alpha) {}
 
     void generate() override ATTRIBUTE_OPTIMIZE {
         using namespace Xbyak;
@@ -691,8 +693,7 @@ dnnl_status_t jump_to_gemm_smalln_tn(
         const gemm_info_t<float, float, float> *arg) {
     if ((arg->n < 16 && arg->n > 1 && arg->transa == do_trans
                 && arg->transb != do_trans)
-            && mayiuse(avx512_core) && __BUILD_GEMM_AVX512
-            && arg->co == nullptr) {
+            && mayiuse(avx512_core) && arg->co == nullptr) {
         auto transa_char = (arg->transa != do_trans) ? "N" : "T";
         auto transb_char = (arg->transb != do_trans) ? "N" : "T";
         return jit_avx512_core_gemm_smalln_tn_f32(transa_char, transb_char,

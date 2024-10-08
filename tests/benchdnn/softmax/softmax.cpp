@@ -1,6 +1,5 @@
 /*******************************************************************************
 * Copyright 2019-2024 Intel Corporation
-* Copyright 2024 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -38,10 +37,9 @@ namespace softmax {
 dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
     const prb_t *prb = init_pd_args.prb;
     res_t *res = init_pd_args.res;
-    bool force_f32_dt = init_pd_args.force_f32_dt;
 
-    auto dst_d = dnn_mem_t::init_md(prb->ndims, prb->dims.data(),
-            force_f32_dt ? dnnl_f32 : prb->ddt, prb->dtag);
+    auto dst_d = dnn_mem_t::init_md(
+            prb->ndims, prb->dims.data(), prb->ddt, prb->dtag);
 
     dnnl_alg_kind_t alg_kind = dnnl_softmax_accurate;
     if (prb->alg == LOGSOFTMAX) alg_kind = dnnl_softmax_log;
@@ -52,8 +50,8 @@ dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
             create_dnnl_attr(prb->attr, attr_args));
 
     if (prb->dir & FLAG_FWD) {
-        auto src_d = dnn_mem_t::init_md(prb->ndims, prb->dims.data(),
-                force_f32_dt ? dnnl_f32 : prb->sdt, prb->stag);
+        auto src_d = dnn_mem_t::init_md(
+                prb->ndims, prb->dims.data(), prb->sdt, prb->stag);
 
         auto prop = prb->dir & FLAG_INF ? dnnl_forward_inference
                                         : dnnl_forward_training;
@@ -66,14 +64,14 @@ dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
         // Re-create dst_md with source tag if dst was not specified, immitating
         // default value.
         if (prb->dtag == tag::any) {
-            dst_d = dnn_mem_t::init_md(prb->ndims, prb->dims.data(),
-                    force_f32_dt ? dnnl_f32 : prb->ddt, prb->stag);
+            dst_d = dnn_mem_t::init_md(
+                    prb->ndims, prb->dims.data(), prb->ddt, prb->stag);
         }
 
-        auto diff_src_d = dnn_mem_t::init_md(prb->ndims, prb->dims.data(),
-                force_f32_dt ? dnnl_f32 : prb->sdt, tag::any);
-        auto diff_dst_d = dnn_mem_t::init_md(prb->ndims, prb->dims.data(),
-                force_f32_dt ? dnnl_f32 : prb->ddt, tag::any);
+        auto diff_src_d = dnn_mem_t::init_md(
+                prb->ndims, prb->dims.data(), prb->sdt, tag::any);
+        auto diff_dst_d = dnn_mem_t::init_md(
+                prb->ndims, prb->dims.data(), prb->ddt, tag::any);
 
         TIME_C_PD(DNN_SAFE_STATUS(dnnl_softmax_backward_primitive_desc_create(
                 &init_pd_args.pd, init_pd_args.engine, alg_kind, diff_src_d,
@@ -181,8 +179,7 @@ int fill_data_bwd(data_kind_t data_kind, const prb_t *prb, dnn_mem_t &mem_dt,
         return fill_random_real(mem_dt, mem_fp, nullptr);
     }
 
-    // TODO: replace with some better filling mechanism.
-    const int range = ((seed % 2 == 0) || mem_dt.dt() == dnnl_f16) ? 8 : 128;
+    const int range = seed % 2 == 0 ? 8 : 128;
 
     // to avoid any cancellation error it's better to have d_dst and dst of
     // different signs (refer to ref computations).
@@ -209,8 +206,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
     skip_unimplemented_prelu_po(prb->attr, res, dnnl_softmax);
 
     if (prb->attr.post_ops.find(attr_t::post_ops_t::kind_t::SUM) != -1) {
-        res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
+        res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
         return;
     }
 }
@@ -226,27 +222,12 @@ void skip_invalid_prb(const prb_t *prb, res_t *res) {
 void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
         const args_t &ref_args) {
     const auto trh_dt = (prb->dir & FLAG_FWD) ? prb->ddt : prb->sdt;
-    const bool is_flt_or_dbl = trh_dt == dnnl_f32 || trh_dt == dnnl_f64;
     const float trh_coeff_log = prb->alg == LOGSOFTMAX ? 5 : 1;
-    const float trh_coeff_f32 = is_flt_or_dbl ? 10.f : 1.f;
+    const float trh_coeff_f32
+            = (trh_dt == dnnl_f32 || trh_dt == dnnl_f64) ? 10.f : 1.f;
     const float trh_coeff_bwd = (prb->dir & FLAG_FWD) ? 1.f : 4.f;
-    const float trh_f32 = trh_coeff_log * trh_coeff_bwd * trh_coeff_f32
+    const float trh = trh_coeff_log * trh_coeff_bwd * trh_coeff_f32
             * epsilon_dt(trh_dt);
-#if DNNL_AARCH64 || defined(DNNL_SYCL_HIP)
-    // MIOpen and ACL softmax accumulate in F16, but oneDNN now expects accumulation in
-    // F32, this partially reverts 6727bbe8. For more information on ACL softmax, see
-    // https://github.com/oneapi-src/oneDNN/issues/1819
-    // Similarly, for bf16 on AArch64, the relaxed threshold is necessary due to
-    // minor accuracy drops observed compared to f32
-    const float trh = trh_f32;
-#else
-    const bool is_strict_acc
-            = prb->attr.acc_mode == dnnl_accumulation_mode_strict;
-    // Relaxed fp16 computation can get an ulp difference with f32 ref values.
-    const float trh = is_flt_or_dbl || (trh_dt == dnnl_f16 && !is_strict_acc)
-            ? trh_f32
-            : 0.f;
-#endif
     cmp.set_threshold(trh);
 
     // LogSoftMax is unstable enough when there are attributes on top.
@@ -269,17 +250,9 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
 
     const auto softmax_add_check
             = [&](const compare::compare_t::driver_check_func_args_t &args) {
-#if DNNL_AARCH64_USE_ACL
-                  auto diff_trh = epsilon_dt(args.dt);
-#else
-                  auto diff_trh = epsilon_dt(dnnl_f32);
-#endif
                   // SSE4.1 and OpenCL rdiff tolerance is too high for
                   // certain scenarios.
-                  // Additionally, OpenCL expf implementation may return 1e-38f
-                  // values for big negative numbers. This is the guard from
-                  // such values.
-                  return args.diff < diff_trh;
+                  return args.diff < epsilon_dt(args.dt);
               };
     cmp.set_driver_check_function(softmax_add_check);
 }
@@ -318,12 +291,12 @@ fill_cfg_t binary_po_fill_cfg(
 }
 
 int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
-        dnnl_primitive_t prim, const prb_t *prb, res_t *res,
+        dnnl_primitive_t prim, const prb_t *prb, res_t *res, dir_t dir,
         dnnl_primitive_t prim_ref) {
+    update_inplace_memory_args(mem_map, prb, dir);
     if (has_bench_mode_modifier(mode_modifier_t::no_host_memory)) return OK;
 
     const auto &ref_engine = get_cpu_engine();
-    const bool is_fwd_prim = is_fwd_prop_kind(query_prop_kind(query_pd(prim)));
 
     for (auto &entry : mem_map) {
         const int exec_arg = entry.first;
@@ -354,7 +327,7 @@ int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
                 }
                 break;
             case DNNL_ARG_DST:
-                if (!is_fwd_prim) {
+                if (dir & FLAG_BWD) {
                     const bool neg_sign = prb->alg == SOFTMAX ? true : false;
                     SAFE(fill_data_bwd(DST, prb, mem, ref_mem, neg_sign), WARN);
                 }
@@ -421,8 +394,9 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     dnn_mem_map_t mem_map, ref_mem_map;
     init_memory_args<prb_t>(mem_map, prb, prim, supported_exec_args(prb->dir));
-    TIME_FILL(SAFE(
-            init_ref_memory_args(ref_mem_map, mem_map, prim, prb, res), WARN));
+    TIME_FILL(SAFE(init_ref_memory_args(
+                           ref_mem_map, mem_map, prim, prb, res, prb->dir),
+            WARN));
 
     args_t args(mem_map), ref_args(ref_mem_map);
 
@@ -430,8 +404,7 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     check_correctness(
             prb, get_kinds_to_check(prb), args, ref_args, setup_cmp, res);
-    SAFE(check_bitwise(prim, get_kinds_to_check(prb), args, prb->attr,
-                 prb->inplace, res),
+    SAFE(check_bitwise(prim, get_kinds_to_check(prb), args, prb->inplace, res),
             WARN);
 
     return measure_perf(prb->ctx_exe, res, prim, args);

@@ -1,6 +1,7 @@
 # f16
 --reset
 
+--skip-impl=ref
 --trivial-strides=true,false
 --alg=VANILLA_GRU,LBR_GRU
 --activation=UNDEF

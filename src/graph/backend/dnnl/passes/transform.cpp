@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2021-2024 Intel Corporation
+ * Copyright 2021-2023 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -143,7 +143,6 @@ status_t replace_quant_data_with_binary_post_op(
     for (const auto &cur_op : sg->get_ops()) {
         if ((is_output_scales_supported(cur_op->get_kind())
                     && cur_op->get_kind() != op_kind::dnnl_softmax
-                    && cur_op->get_kind() != op_kind::dnnl_groupnorm
                     && cur_op->get_kind() != op_kind::dnnl_layernorm)
                 || visited.count(cur_op.get()))
             continue;
@@ -787,6 +786,8 @@ status_t fuse_post_ops(std::shared_ptr<subgraph_t> &sg) {
     // lambda function to fuse one post op into base primitive
     auto fuse_post_ops_func = [&](bool &changed) -> status_t {
         auto &mgr = sg->fusion_info_mgr_;
+        subgraph_rewriter_t rewriter(sg);
+
         std::vector<std::pair<op_t *, op_t *>> fuse_groups;
 
         std::set<op_t *> visited;
@@ -813,8 +814,7 @@ status_t fuse_post_ops(std::shared_ptr<subgraph_t> &sg) {
             bool not_fusible
                     = (!pops_fusible_map.at(base_op_kind).count(post_op_kind))
                     || (post_op_kind == op_kind::dnnl_binary
-                            && !post_binary_fusible(
-                                    op, &post_op, sg->get_engine_kind()))
+                            && !post_binary_fusible(op, &post_op))
                     || (post_op_kind == op_kind::dnnl_convolution
                             && !post_depthwise_conv_fusible(op, &post_op));
             if (not_fusible) { return status::success; }
@@ -832,7 +832,7 @@ status_t fuse_post_ops(std::shared_ptr<subgraph_t> &sg) {
             changed = false;
             return status::success;
         }
-        subgraph_rewriter_t rewriter(sg);
+
         for (auto &fuse_group : fuse_groups) {
             auto base_op = fuse_group.first;
             auto post_op = fuse_group.second;
@@ -1099,25 +1099,6 @@ status_t fuse_src_scales(std::shared_ptr<subgraph_t> &sg) {
         auto &next_op = consumers[0].get_op();
         auto offset = consumers[0].get_offset();
         if (offset == 0 || offset == 1) {
-            // Matmul only support applying scale per channel along the last
-            // dimension for DNNL_ARG_WEIGHTS.
-            if (offset == 1 && next_op.get_kind() == op_kind::dnnl_matmul
-                    && scale_op->has_attr(op_attr::qtype)
-                    && scale_op->get_attr<std::string>(op_attr::qtype)
-                            == "per_channel"
-                    && scale_op->has_attr(op_attr::axis)) {
-                int64_t axis = scale_op->get_attr<int64_t>(op_attr::axis);
-                bool trans_flag = next_op.has_attr(op_attr::transpose_b)
-                        ? next_op.get_attr<bool>(op_attr::transpose_b)
-                        : false;
-                int ndims = scale_op->get_input_value(0)
-                                    ->get_logical_tensor()
-                                    .ndims;
-                if ((!trans_flag && axis != ndims - 1 && axis != -1)
-                        || (trans_flag && axis != ndims - 2 && axis != -2)) {
-                    return status::unimplemented;
-                }
-            }
             int64_t key = -1;
             if (next_op.has_attr(op_attr::fusion_info_key)) {
                 key = next_op.get_attr<int64_t>(op_attr::fusion_info_key);
@@ -1163,7 +1144,6 @@ status_t fuse_dst_scales(std::shared_ptr<subgraph_t> &sg) {
                     && cur_op->get_kind() != op_kind::dnnl_convtranspose
                     && cur_op->get_kind() != op_kind::dnnl_softmax
                     && cur_op->get_kind() != op_kind::dnnl_layernorm
-                    && cur_op->get_kind() != op_kind::dnnl_groupnorm
                     && cur_op->get_kind() != op_kind::dnnl_reorder)
                 || visited.count(cur_op.get()) != 0)
             continue;
@@ -1210,8 +1190,7 @@ status_t convert_to_runtime_dst_scales(std::shared_ptr<subgraph_t> &sg) {
                 || !impl::utils::one_of(cur_op->get_input_op(0)->get_kind(),
                         op_kind::dnnl_softmax, op_kind::dnnl_layernorm,
                         op_kind::dnnl_convolution, op_kind::dnnl_matmul,
-                        op_kind::dnnl_convtranspose, op_kind::dnnl_reorder,
-                        op_kind::dnnl_groupnorm)
+                        op_kind::dnnl_convtranspose, op_kind::dnnl_reorder)
                 || visited.count(cur_op.get()))
             continue;
 
@@ -1923,7 +1902,7 @@ status_t fuse_post_typecast_to_predecessor(std::shared_ptr<subgraph_t> &sg) {
         if (!impl::utils::one_of(cur_op->get_kind(), op_kind::dnnl_matmul,
                     op_kind::dnnl_convolution, op_kind::dnnl_eltwise,
                     op_kind::dnnl_binary, op_kind::dnnl_softmax,
-                    op_kind::dnnl_layernorm, op_kind::dnnl_groupnorm))
+                    op_kind::dnnl_layernorm))
             continue;
         auto out = cur_op->get_output_value(0);
         if (out->get_consumers().size() != 1) continue;
@@ -1936,9 +1915,8 @@ status_t fuse_post_typecast_to_predecessor(std::shared_ptr<subgraph_t> &sg) {
             // bf16-int8 mix precision case
             auto &next_next_op = tc_out->get_consumers()[0].get_op();
             out->remove_consumer(next_op, 0);
-            auto offset = tc_out->get_consumers()[0].get_offset();
-            tc_out->remove_consumer(next_next_op, offset);
-            next_next_op.connect_input(offset, out);
+            tc_out->remove_consumer(next_next_op, 0);
+            next_next_op.connect_input(0, out);
             out->set_data_type(tc_out->get_logical_tensor().data_type);
             fusion_groups.emplace_back(std::vector<op_t *> {&next_op});
         } else {
@@ -3363,7 +3341,6 @@ impl::status_t lift_up_typecast(std::shared_ptr<subgraph_t> &sg) {
             rewriter.swap_neighboring_si_ops(
                     producer->shared_from_this(), tc->shared_from_this());
         }
-        rewriter.run();
     }
     return infer_shape(sg);
 }
@@ -3401,78 +3378,7 @@ impl::status_t lift_up_quantize(std::shared_ptr<subgraph_t> &sg) {
             rewriter.swap_neighboring_si_ops(
                     producer->shared_from_this(), quant->shared_from_this());
         }
-        rewriter.run();
     }
-    return infer_shape(sg);
-}
-
-impl::status_t lift_up_post_add_for_matmul(std::shared_ptr<subgraph_t> &sg) {
-    subgraph_rewriter_t rewriter(sg);
-    for (const auto &cur_op : sg->get_ops()) {
-        if (cur_op->get_kind() != op_kind::dnnl_matmul) continue;
-        auto matmul_out = cur_op->get_output_value(0);
-        if (matmul_out->get_consumers().size() != 1) continue;
-        auto &post_reshape = matmul_out->get_consumers()[0].get_op();
-        if (post_reshape.get_kind() != op_kind::dnnl_reshape) continue;
-        auto reshape_in = post_reshape.get_input_value(0);
-        auto reshape_out = post_reshape.get_output_value(0);
-        if (reshape_out->get_consumers().size() != 1) continue;
-        auto &post_transpose = reshape_out->get_consumers()[0].get_op();
-        if (post_transpose.get_kind() != op_kind::dnnl_transpose) continue;
-        auto transpose_out = post_transpose.get_output_value(0);
-        if (transpose_out->get_consumers().size() != 1) continue;
-        auto &post_add = transpose_out->get_consumers()[0].get_op();
-
-        if (post_add.get_kind() == op_kind::dnnl_binary) {
-            const auto alg_kind = static_cast<dnnl::algorithm>(
-                    post_add.get_attr<int64_t>(op_attr::alg_kind));
-            if (alg_kind != dnnl::algorithm::binary_add) continue;
-            int32_t add_ndims
-                    = post_add.get_input_value(0)->get_logical_tensor().ndims;
-            int32_t matmul_ndims
-                    = post_add.get_input_value(0)->get_logical_tensor().ndims;
-            // A little bit tricky here, it's only served for MQA case now.
-            if (add_ndims != 4 && matmul_ndims != 3) continue;
-
-            auto add_in_val = post_add.get_input_value(0);
-            auto add_out_val = post_add.get_output_value(0);
-            auto &post_op = add_out_val->get_consumers()[0].get_op();
-
-            // move add after matmul
-            matmul_out->remove_consumer(post_reshape, 0);
-            post_add.connect_input(0, matmul_out);
-            logical_tensor_t new_lt = empty_logical_tensor_with_default_id();
-            auto new_val = std::make_shared<value_t>(post_add, 0, new_lt, true);
-            new_val->set_data_type(add_out_val->get_logical_tensor().data_type);
-            post_add.connect_output(0, new_val);
-            post_reshape.connect_input(0, new_val);
-            post_op.connect_input(0, add_in_val);
-            add_out_val->remove_consumer(post_op, 0);
-
-            // insert transpose op before src1 of post-add
-            auto transpose_op = std::make_shared<op_t>(op_kind::dnnl_transpose);
-            std::vector<int64_t> order
-                    = post_transpose.get_attr<std::vector<int64_t>>(
-                            op_attr::order);
-            std::vector<int64_t> reverse_order(order.size());
-            for (size_t i = 0; i < order.size(); i++) {
-                reverse_order[order[i]] = i;
-            }
-            transpose_op->set_attr<std::vector<int64_t>>(
-                    op_attr::order, reverse_order);
-            rewriter.insert_op_before(
-                    transpose_op, post_add.shared_from_this(), 1, 0, 0);
-            // insert reshape op before src1 of post-add
-            auto reshape_op = std::make_shared<op_t>(op_kind::dnnl_reshape);
-            std::vector<int64_t> shape
-                    = ltw(reshape_in->get_logical_tensor()).vdims();
-            reshape_op->set_attr<std::vector<int64_t>>(op_attr::shape, shape);
-            reshape_op->set_attr<bool>(op_attr::special_zero, false);
-            rewriter.insert_op_before(
-                    reshape_op, post_add.shared_from_this(), 1, 0, 0);
-        }
-    }
-    rewriter.run();
     return infer_shape(sg);
 }
 
@@ -3524,77 +3430,12 @@ impl::status_t lift_up_weight_reshape_for_depthwiseconv(
     subgraph_rewriter_t rewriter(sg);
     for (auto &pair : to_be_swapped) {
         op_t *baseop = pair.first;
-        for (auto swapped : pair.second)
+        for (auto swaped : pair.second)
             rewriter.swap_neighboring_reshape_ops(
-                    swapped->shared_from_this(), baseop->shared_from_this());
+                    swaped->shared_from_this(), baseop->shared_from_this());
     }
-    rewriter.run();
+
     return infer_shape(sg);
-}
-
-impl::status_t fuse_src_transpose_to_matmul(std::shared_ptr<subgraph_t> &sg) {
-    std::vector<op_ptr> transpose_ops;
-    for (const auto &cur_op : sg->get_ops()) {
-        // This pass works for the following certain pattern, can be expanded in
-        // the future: (softmax + transpose + reshape/reorder + matmul)
-        if (cur_op->get_kind() != op_kind::dnnl_transpose) continue;
-        if (!(cur_op->get_input_value(0)->has_producer()
-                    && cur_op->get_input_value(0)->get_producer().get_kind()
-                            == op_kind::dnnl_softmax))
-            continue;
-        auto transpose_out = cur_op->get_output_value(0);
-        if (transpose_out->get_consumers().size() != 1) continue;
-        auto &post_op = transpose_out->get_consumers()[0].get_op();
-        if (post_op.get_kind() != op_kind::dnnl_reshape
-                && !is_layout_reorder(&post_op))
-            continue;
-        auto post_out = post_op.get_output_value(0);
-        if (post_out->get_consumers().size() != 1) continue;
-        auto &ppost_op = post_out->get_consumers()[0].get_op();
-        if (ppost_op.get_kind() == op_kind::dnnl_matmul) {
-            transpose_ops.emplace_back(cur_op);
-        }
-    }
-
-    subgraph_rewriter_t rewriter(sg);
-    for (auto &transpose_op : transpose_ops) {
-        value_ptr in_val = transpose_op->get_input_value(0);
-        auto in_lt = in_val->get_logical_tensor();
-        value_ptr out_val = transpose_op->get_output_value(0);
-        std::vector<int64_t> order
-                = transpose_op->get_attr<std::vector<int64_t>>(op_attr::order);
-        // if order < 0, convert it to positive order
-        if (!order.empty()) {
-            for (int64_t &axis : order) {
-                if (axis < 0) axis += ltw(in_lt).ndims();
-            }
-        } else {
-            break;
-        }
-
-        std::vector<int> axes = dnnl_impl::utils::fmap(order,
-                [](int64_t index) { return static_cast<int32_t>(index); });
-        // calculate the expected transposed layout by permuting the md
-        auto expected_stride = get_dense_strides(ltw(in_lt).vdims());
-        auto &consumer = transpose_op->get_output_value(0)
-                                 ->get_consumers()[0]
-                                 .get_op();
-        if (is_layout_reorder(&consumer)) {
-            value_ptr reorder_out_val = consumer.get_output_value(0);
-            if (ltw(reorder_out_val->get_logical_tensor()).layout_type()
-                    == layout_type::strided) {
-                rewriter.fuse_op_to_successor(consumer.shared_from_this());
-            }
-        }
-        dnnl::memory::desc in_md {ltw(in_lt).vdims(),
-                static_cast<dnnl::memory::data_type>(ltw(in_lt).data_type()),
-                expected_stride};
-        dnnl::memory::desc expected_in_md = in_md.permute_axes(axes);
-        const auto &strides = expected_in_md.get_strides();
-        out_val->set_strides(strides);
-    }
-    rewriter.run();
-    return impl::status::success;
 }
 
 impl::status_t fuse_dst_transpose_to_matmul(std::shared_ptr<subgraph_t> &sg) {
@@ -3631,7 +3472,7 @@ impl::status_t fuse_dst_transpose_to_matmul(std::shared_ptr<subgraph_t> &sg) {
                 if (axis < 0) axis += ltw(in_lt).ndims();
             }
         } else {
-            break;
+            return impl::status::success;
         }
 
         std::vector<int> axes = dnnl_impl::utils::fmap(order,
@@ -3654,58 +3495,13 @@ impl::status_t fuse_dst_transpose_to_matmul(std::shared_ptr<subgraph_t> &sg) {
                 static_cast<dnnl::memory::data_type>(ltw(out_lt).data_type()),
                 expected_stride};
         dnnl::memory::desc expected_out_md = out_md.permute_axes(axes);
-        // Special check to avoid low matmul performance with adbc layout.
-        // TODO: remove this once the performance is improved.
-        if (get_format_tag(expected_out_md) == dnnl::memory::format_tag::adbc) {
-            break;
-        }
         const auto &strides = expected_out_md.get_strides();
         in_val->set_strides(strides);
         auto &matmul = transpose_op->get_input_value(0)->get_producer();
         matmul.set_attr(op_attr::keep_dst_layout, true);
     }
-    rewriter.run();
+
     return impl::status::success;
-}
-
-impl::status_t fuse_reshape_for_gqa(std::shared_ptr<subgraph_t> &sg) {
-    std::vector<op_ptr> reshape_ops;
-    dnnl_dim_t head_num;
-    for (auto &cur_op : sg->get_ops()) {
-        auto in = cur_op->get_input_value(0)->get_logical_tensor();
-        auto out = cur_op->get_output_value(0)->get_logical_tensor();
-        if (cur_op->get_kind() == op_kind::dnnl_reshape) {
-            if (ltw(in).ndims() == 5 || ltw(out).ndims() == 5) {
-                reshape_ops.emplace_back(cur_op);
-                if (ltw(in).ndims() == 5) head_num = ltw(out).vdims()[1];
-            }
-        }
-    }
-
-    subgraph_rewriter_t rewriter(sg);
-    for (auto &reshape_op : reshape_ops) {
-        auto in = reshape_op->get_input_value(0)->get_logical_tensor();
-        auto out = reshape_op->get_output_value(0)->get_logical_tensor();
-        if (ltw(in).ndims() == 5)
-            rewriter.fuse_op_to_predecessor(reshape_op->shared_from_this());
-        if (ltw(out).ndims() == 5) {
-            auto in_dims = ltw(in).vdims();
-            // set the dim to 1 to ensure the shape infer can be passed.
-            // eg:[32,16,384,64]*[32,2,384,64] -> [32,16,384,64]*[32,1,384,64]
-            if (in_dims[1] != head_num) in_dims[1] = 1;
-            reshape_op->get_input_value(0)->set_dims(in_dims);
-            rewriter.fuse_op_to_successor(reshape_op->shared_from_this());
-        }
-    }
-    rewriter.run();
-
-    //rewrite the subgraph internal logical_tensor's shape
-    for (auto &cur_op : sg->get_ops()) {
-        auto out_val = cur_op->get_output_value(0);
-        //the subgraph output logical tensor don't change shape.
-        if (!out_val->get_consumers().empty()) out_val->set_ndims(-1);
-    }
-    return infer_shape(sg);
 }
 
 impl::status_t swap_relu_mul_scales(std::shared_ptr<subgraph_t> &sg) {
@@ -3745,7 +3541,6 @@ impl::status_t swap_relu_mul_scales(std::shared_ptr<subgraph_t> &sg) {
             rewriter.swap_neighboring_si_ops(
                     relu->shared_from_this(), mul_scales->shared_from_this());
         }
-        rewriter.run();
     }
     return infer_shape(sg);
 }
@@ -3818,33 +3613,6 @@ impl::status_t fold_post_mul_scale_into_bn(std::shared_ptr<subgraph_t> &sg) {
     }
 
     rewriter.run();
-    return infer_shape(sg);
-}
-
-impl::status_t replace_select_values(std::shared_ptr<subgraph_t> &sg) {
-    std::unordered_set<op_kind_t> select_kind
-            = {op_kind::dnnl_eltwise, op_kind::dnnl_binary};
-    std::vector<op_ptr> out_ops;
-    for (const auto &cur_op : sg->get_ops()) {
-        if (select_kind.count(cur_op->get_kind())) {
-            auto out_val = cur_op->get_output_value(0);
-            if (out_val->get_consumers().size() == 1) {
-                auto consumer = out_val->get_consumers()[0].get_op();
-                if (consumer.get_kind() == op_kind::dnnl_matmul) {
-                    out_ops.emplace_back(cur_op);
-                }
-            }
-        }
-    }
-    int index = 1;
-    for (const auto &cur_op : out_ops) {
-        auto out_val = cur_op->get_output_value(0);
-        logical_tensor_t new_lt(out_val->get_logical_tensor());
-        new_lt.id -= index;
-        index++;
-        auto new_val = std::make_shared<value_t>(*cur_op, 0, new_lt);
-        cur_op->connect_output(0, new_val);
-    }
     return infer_shape(sg);
 }
 

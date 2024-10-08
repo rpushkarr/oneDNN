@@ -1,5 +1,5 @@
 #===============================================================================
-# Copyright 2016-2024 Intel Corporation
+# Copyright 2016-2023 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -69,10 +69,6 @@ macro(platform_gnu_x64_arch_ccxx_flags var)
     set(${var} "-msse4.1")
 endmacro()
 
-macro(platform_clang_x64_arch_ccxx_flags var)
-    set(${var} "-msse4.1")
-endmacro()
-
 macro(platform_gnu_nowarn_ccxx_flags var gnu_version)
     # suppress warning on assumptions made regarding overflow (#146)
     append(${var} "-Wno-strict-overflow")
@@ -84,13 +80,6 @@ macro(platform_gnu_nowarn_ccxx_flags var gnu_version)
         (${gnu_version} VERSION_GREATER 10.0 AND ${gnu_version} VERSION_LESS 11.0))
         append(${var} "-Wno-stringop-overflow")
     endif()
-endmacro()
-
-macro(platform_clang_nowarn_ccxx_flags var)
-    # Clang cannot vectorize some loops with #pragma omp simd and gets
-    # very upset. Tell it that it's okay and that we love it
-    # unconditionally.
-    append(${var} "-Wno-pass-failed")
 endmacro()
 
 if(DNNL_WITH_SYCL)
@@ -172,15 +161,6 @@ if(MSVC)
             # The compiler may issue the corresponding remark.
             append(CMAKE_CCXX_FLAGS "-Rno-debug-disables-optimization")
         endif()
-
-        # Disabling OMP SIMD feature on Windows ICX debug builds and suppressing this warning:
-        # Using /MTd or /MDd with '#pragma omp simd' may lead to unexpected fails due
-        # to the debugging version of iterators that cannot be vectorized correctly.
-        if (UPPERCASE_CMAKE_BUILD_TYPE MATCHES "(DEBUG|RELWITHMDD)")
-            append(CMAKE_CCXX_FLAGS "/Qopenmp-simd-")
-            append(CMAKE_CCXX_FLAGS "/Wno-debug-option-simd")
-        endif()
-
         # Default fp-model in icx and dpcpp (unlike clang) may be precise or
         # fast=1 depending on the version.
         append(CMAKE_CCXX_FLAGS "/fp:precise")
@@ -263,10 +243,12 @@ elseif(UNIX OR MINGW)
                  append(DEF_ARCH_OPT_FLAGS "-march=native")
              endif()
         elseif(DNNL_TARGET_ARCH STREQUAL "X64")
-             platform_clang_x64_arch_ccxx_flags(DEF_ARCH_OPT_FLAGS)
+             set(DEF_ARCH_OPT_FLAGS "-msse4.1")
         endif()
-        platform_clang_nowarn_ccxx_flags(CMAKE_CCXX_NOWARN_FLAGS)
-
+        # Clang cannot vectorize some loops with #pragma omp simd and gets
+        # very upset. Tell it that it's okay and that we love it
+        # unconditionally.
+        append(CMAKE_CCXX_NOWARN_FLAGS "-Wno-pass-failed")
         if(DNNL_USE_CLANG_SANITIZER MATCHES "Memory(WithOrigin)?")
             if(NOT DNNL_CPU_THREADING_RUNTIME STREQUAL "SEQ")
                 message(WARNING "Clang OpenMP is not compatible with MSan! "
@@ -386,9 +368,6 @@ elseif(UNIX OR MINGW)
         append(CMAKE_CCXX_NOWARN_FLAGS "-diag-disable:15335")
         # disable: foo has been targeted for automatic cpu dispatch
         append(CMAKE_CCXX_NOWARN_FLAGS "-diag-disable:15009")
-        # The Intel(R) C++ Compiler Classic (ICC) is deprecated and will be
-        # removed from product release in the second half of 2023.
-        append(CMAKE_CCXX_NOWARN_FLAGS "-diag-disable:10441")
     endif()
 endif()
 

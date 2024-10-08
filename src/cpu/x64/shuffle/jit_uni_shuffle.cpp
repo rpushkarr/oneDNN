@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@
 #include "common/bfloat16.hpp"
 #include "common/c_types_map.hpp"
 #include "common/dnnl_thread.hpp"
-#include "common/math_utils.hpp"
 #include "common/type_helpers.hpp"
 
 #include "cpu/x64/jit_generator.hpp"
@@ -52,19 +51,14 @@ status_t jit_uni_shuffle_t<isa>::pd_t::init(engine_t *engine) {
 
     conf_.data_type = src_d.data_type();
 
-    // disabling verbose dispatch messages for unsupported isa for better readability
-    if (!mayiuse(isa)) return status::unimplemented;
+    const bool ok = mayiuse(isa)
+            && utils::one_of(conf_.data_type, f32, s32, bf16)
+            && src_d.data_type() == dst_d.data_type()
+            && impl_supports_datatype(isa, conf_.data_type)
+            && attr()->has_default_values() && axis() == 1
+            && set_default_formats_common() && src_d == dst_d;
 
-    VDISPATCH_SHUFFLE(utils::one_of(conf_.data_type, f32, s32, bf16),
-            VERBOSE_UNSUPPORTED_DT);
-    VDISPATCH_SHUFFLE(src_d.data_type() == dst_d.data_type(),
-            VERBOSE_INCONSISTENT_DT, "src", "dst");
-    VDISPATCH_SHUFFLE(impl_supports_datatype(isa, conf_.data_type),
-            VERBOSE_ISA_DT_MISMATCH);
-    VDISPATCH_SHUFFLE(attr()->has_default_values(), VERBOSE_UNSUPPORTED_ATTR);
-    VDISPATCH_SHUFFLE(axis() == 1, VERBOSE_BAD_AXIS);
-    VDISPATCH_SHUFFLE(set_default_formats_common(), VERBOSE_UNSUPPORTED_TAG);
-    VDISPATCH_SHUFFLE(src_d == dst_d, VERBOSE_INCONSISTENT_MDS, "src", "dst");
+    if (!ok) return status::unimplemented;
 
     conf_.isa = isa;
     if (isa == avx) conf_.isa = mayiuse(avx2) ? avx2 : avx;
@@ -75,8 +69,7 @@ status_t jit_uni_shuffle_t<isa>::pd_t::init(engine_t *engine) {
             = memory_desc_matches_one_of_tag(*src_d.md_, nCw16c, nChw16c,
                     nCdhw16c, nCw8c, nChw8c, nCdhw8c, nCw4c, nChw4c, nCdhw4c);
 
-    VDISPATCH_SHUFFLE(
-            blocked_format != format_tag::undef, VERBOSE_UNSUPPORTED_TAG);
+    if (blocked_format == format_tag::undef) return status::unimplemented;
 
     conf_.blk_size = src_d.blocking_desc().strides[ndims() - 1];
     conf_.simd_w = cpu_isa_traits<isa>::vlen / sizeof(float);

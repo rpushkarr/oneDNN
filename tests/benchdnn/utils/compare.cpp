@@ -223,12 +223,6 @@ int compare_t::compare_norm(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
     if (dump) dump_norm_values(diff_norm, get_kind_str());
 
     if (res->errors) res->state = FAILED;
-
-    // Status may be propagated from previous tensor. Use stats from cur tensor.
-    BENCHDNN_PRINT((res->errors ? 0 : 6),
-            "[COMPARE_STATS]%s: trh=%g (compare against [L2] rel_diff)\n",
-            get_kind_str().c_str(), trh_);
-
     if (res->state == EXECUTED) res->state = PASSED;
 
     return res->state == FAILED ? FAIL : OK;
@@ -256,12 +250,10 @@ int compare_t::compare_p2p(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
     const auto dt = got_mem.dt();
     const bool has_eltwise
             = attr.post_ops.eltwise_index() != -1 || has_eltwise_post_op_;
-    const std::vector<dnnl_data_type_t> dt_with_nan {
-            dnnl_f16, dnnl_e8m0, dnnl_f8_e5m2, dnnl_f8_e4m3};
     const bool output_has_nans = op_output_has_nans_
             || eltwise::eltwise_alg_returns_nan_or_inf(attr)
-            || std::any_of(dt_with_nan.begin(), dt_with_nan.end(),
-                    [&](dnnl_data_type_t dt) { return got_mem.dt() == dt; });
+            || got_mem.dt() == dnnl_f16 || got_mem.dt() == dnnl_f8_e5m2
+            || got_mem.dt() == dnnl_f8_e4m3;
     const bool has_exp_eltwise
             = attr.post_ops.find(attr_t::post_ops_t::kind_t::EXP) >= 0;
     const bool has_dst_scale = !attr.scales.get(DNNL_ARG_DST).is_def();
@@ -336,19 +328,9 @@ int compare_t::compare_p2p(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
             // function). We rely on validation of pure eltwise and let some
             // big rdiff errors slip away hoping that absolute error is good
             // enough.
-            // Note: two scenarios covered:
-            // * When rdiff is bigger due to small output values but diff is
-            //   small due to single point computation or short acc chain.
-            // * When diff is no longer small due to longer acc chain, but rdiff
-            //   is still small but greater than 0.
-            const float experimental_eltwise_trh_diff
+            const float experimental_eltwise_trh
                     = std::max(epsilon_dt(dt), 2e-5f);
-            const float experimental_eltwise_trh_rel_diff
-                    = std::max(epsilon_dt(dt), 1e-6f);
-            ok = has_eltwise
-                    && (args.diff <= experimental_eltwise_trh_diff
-                            || args.rel_diff
-                                    <= experimental_eltwise_trh_rel_diff);
+            ok = has_eltwise && args.diff <= experimental_eltwise_trh;
             if (ok) break;
 
             // For eltwise it also may happen that threshold is really small,
@@ -482,10 +464,7 @@ int compare_t::compare_p2p(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
     };
 
     // parallel comparison to speed up the process
-    // TODO: to speed up the dump process, each thread should prepare its dump
-    // piece in a string object, then the master thread prints them in order.
-    // With this logic, the block of code below won't be needed.
-    benchdnn_parallel_nd(nelems_pad, compare_point_values);
+    if (!need_dump) benchdnn_parallel_nd(nelems_pad, compare_point_values);
 
     // serial comparison with enabled dumping when needed for nicer output.
     if (!global_ok || need_dump) {

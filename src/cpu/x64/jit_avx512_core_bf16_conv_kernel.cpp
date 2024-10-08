@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2024 Intel Corporation
+* Copyright 2019-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -99,7 +99,9 @@ template <typename Vmm>
 _jit_avx512_core_bf16_fwd_kernel<Vmm>::_jit_avx512_core_bf16_fwd_kernel(
         const jit_conv_conf_t &ajcp, const primitive_attr_t &attr,
         const memory_desc_t &dst_md)
-    : jit_generator(jit_name(), avx512_core_bf16), jcp(ajcp), attr_(attr) {
+    : jit_generator(jit_name(), nullptr, ker_code_size, true, avx512_core_bf16)
+    , jcp(ajcp)
+    , attr_(attr) {
     if (jcp.with_eltwise || jcp.with_binary) {
         using namespace binary_injector;
         static constexpr bool preserve_gpr = true;
@@ -803,8 +805,7 @@ void _jit_avx512_core_bf16_fwd_kernel<Vmm>::generate() {
     if (jcp.ndims == 5) add(rsp, stack_space_needed_);
     postamble();
 
-    if (jcp.with_eltwise)
-        postops_injector_->prepare_table(/* generate = */ true);
+    if (jcp.with_eltwise) postops_injector_->prepare_table();
 }
 
 void jit_avx512_core_bf16_fwd_kernel::init_scratchpad(

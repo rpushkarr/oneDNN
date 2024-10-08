@@ -49,76 +49,43 @@ status_t matmul_attr_check(const matmul_desc_t &desc, const engine_t *engine,
     const data_type_t wei_dt = desc.weights_desc.data_type;
     const data_type_t dst_dt = desc.dst_desc.data_type;
 
-    auto attr_mask = smask_t::post_ops | smask_t::sum_dt | smask_t::dropout
-            | smask_t::rounding_mode;
+    auto attr_mask = smask_t::post_ops | smask_t::sum_dt;
     // Matmul supports scales for floating point data types
     attr_mask |= smask_t::scales_runtime;
-    attr_mask |= smask_t::scales_runtime_data_type;
 
-    const bool src_is_int8
-            = utils::one_of(src_dt, data_type::s8, data_type::u8);
-    if (src_is_int8) attr_mask |= smask_t::zero_points_runtime;
+    const bool is_int8 = utils::one_of(src_dt, data_type::s8, data_type::u8);
+    if (is_int8) attr_mask |= smask_t::zero_points_runtime;
 
-    // Matmul supports zero points for floating point data types as part of
-    // weights decompression.
-    const bool wei_is_int = utils::one_of(
-            wei_dt, data_type::s8, data_type::u8, data_type::s4, data_type::u4);
-    if (wei_is_int) {
+    // Matmul supports zero points for floating point data types as part of weights decompression
+    const bool wei_is_int8
+            = utils::one_of(wei_dt, data_type::s8, data_type::u8);
+    if (!is_int8 && wei_is_int8) {
         attr_mask |= smask_t::zero_points_runtime_data_type;
         attr_mask |= smask_t::zero_points_runtime_groups;
+        attr_mask |= smask_t::scales_runtime_data_type;
         attr_mask |= smask_t::scales_runtime_groups;
     }
-
     // Matmul supports fpmath mode
     attr_mask |= smask_t::fpmath_mode;
 
     VCHECK_MATMUL_UNIMPL(attr->has_default_values(attr_mask, dst_dt),
             VERBOSE_UNSUPPORTED_ATTR);
 
-    int ndims_src = desc.src_desc.ndims;
     int ndims_wei = desc.weights_desc.ndims;
-    assert(ndims_src >= 2);
     assert(ndims_wei >= 2);
-    int src_qmask_M = 1 << (ndims_src - 2);
-    int src_qmask_K = 1 << (ndims_src - 1);
-
-    int wei_qmask_K = 1 << (ndims_wei - 2);
     int wei_qmask_N = 1 << (ndims_wei - 1);
+    int wei_qmask_K = 1 << (ndims_wei - 2);
 
     // Check scales
     if (!attr->scales_.has_default_values()) {
         const auto &sc = attr->scales_;
-        const auto &sc_src = sc.get(DNNL_ARG_SRC);
-        const auto &sc_wei = sc.get(DNNL_ARG_WEIGHTS);
-
-        const int mask_src = sc_src.mask_;
-        const int mask_wei = sc_wei.mask_;
+        const int mask_src = sc.get(DNNL_ARG_SRC).mask_;
+        const int mask_wei = sc.get(DNNL_ARG_WEIGHTS).mask_;
         const int mask_dst = sc.get(DNNL_ARG_DST).mask_;
 
-        // Check allowed masks.
-        VCHECK_MATMUL_UNIMPL(utils::one_of(mask_src, 0, src_qmask_K,
-                                     src_qmask_M + src_qmask_K)
+        VCHECK_MATMUL_UNIMPL(utils::everyone_is(0, mask_src, mask_dst)
                         && utils::one_of(mask_wei, 0, wei_qmask_N,
-                                wei_qmask_N + wei_qmask_K)
-                        && mask_dst == 0,
-                VERBOSE_UNSUPPORTED_SCALES_CFG);
-        // Check dependency between scales.
-        // Source scales groups are supported for int8 source and must divide
-        // or be divided by weights groups when both are greater than 1.
-        const auto src_scale_group_k
-                = (mask_src & src_qmask_K) && sc_src.ndims_ > 0
-                ? sc_src.group_dims_[1]
-                : 1;
-        const auto wei_scale_group_k
-                = (mask_wei & wei_qmask_K) && sc_wei.ndims_ > 0
-                ? sc_wei.group_dims_[0]
-                : 1;
-        const bool groups_are_divisible = IMPLICATION(
-                src_scale_group_k > 1 && wei_scale_group_k > 1,
-                (src_scale_group_k % wei_scale_group_k == 0)
-                        || (wei_scale_group_k % src_scale_group_k == 0));
-        VCHECK_MATMUL_UNIMPL(IMPLICATION(src_scale_group_k > 1,
-                                     src_is_int8 && groups_are_divisible),
+                                wei_qmask_N + wei_qmask_K),
                 VERBOSE_UNSUPPORTED_SCALES_CFG);
     }
 
@@ -139,18 +106,6 @@ status_t matmul_attr_check(const matmul_desc_t &desc, const engine_t *engine,
         VCHECK_MATMUL_UNIMPL(mask_dst == 0
                         || (desc.dst_desc.ndims == 2 && mask_dst == 1 << 1),
                 VERBOSE_UNSUPPORTED_ZP_CFG);
-
-        if (utils::one_of(zp.get_data_type(DNNL_ARG_WEIGHTS), data_type::s4,
-                    data_type::u4)) {
-            dim_t k = desc.weights_desc.dims[ndims_wei - 2];
-            dim_t n = desc.weights_desc.dims[ndims_wei - 1];
-            VCHECK_MATMUL_UNIMPL(
-                    IMPLICATION(mask_wei & wei_qmask_K, k % 2 == 0),
-                    VERBOSE_UNSUPPORTED_ZP_CFG);
-            VCHECK_MATMUL_UNIMPL(
-                    IMPLICATION(mask_wei & wei_qmask_N, n % 2 == 0),
-                    VERBOSE_UNSUPPORTED_ZP_CFG);
-        }
     }
 
     // Check post-ops
@@ -162,8 +117,7 @@ status_t matmul_attr_check(const matmul_desc_t &desc, const engine_t *engine,
                 VERBOSE_UNSUPPORTED_POSTOP);
 
         // Check sum
-        VCHECK_MATMUL_UNIMPL(
-                po.check_sum_consistency(dst_dt, src_is_int8, true),
+        VCHECK_MATMUL_UNIMPL(po.check_sum_consistency(dst_dt, is_int8, true),
                 VERBOSE_UNSUPPORTED_POSTOP);
     }
 
@@ -172,27 +126,26 @@ status_t matmul_attr_check(const matmul_desc_t &desc, const engine_t *engine,
 
 } // namespace
 
-namespace dnnl {
-namespace impl {
-status_t matmul_desc_init(matmul_desc_t *matmul_desc,
-        const memory_desc_t *src_desc, const memory_desc_t *weights_desc,
-        const memory_desc_t *bias_desc, const memory_desc_t *dst_desc) {
-    VCHECK_MATMUL(
-            !any_null(src_desc, weights_desc, dst_desc), VERBOSE_NULL_ARG);
+status_t dnnl_matmul_primitive_desc_create(
+        primitive_desc_iface_t **primitive_desc_iface, engine_t *engine,
+        const memory_desc_t *src_md, const memory_desc_t *weights_md,
+        const memory_desc_t *bias_md, const memory_desc_t *dst_md,
+        const primitive_attr_t *attr) {
+    VCHECK_MATMUL(!any_null(src_md, weights_md, dst_md), VERBOSE_NULL_ARG);
 
     auto op_d = matmul_desc_t();
     op_d.primitive_kind = primitive_kind::matmul;
 
-    op_d.src_desc = *src_desc;
-    op_d.weights_desc = *weights_desc;
-    if (bias_desc) op_d.bias_desc = *bias_desc;
-    op_d.dst_desc = *dst_desc;
+    op_d.src_desc = *src_md;
+    op_d.weights_desc = *weights_md;
+    if (bias_md) op_d.bias_desc = *bias_md;
+    op_d.dst_desc = *dst_md;
 
     const bool with_bias = op_d.bias_desc.ndims != 0;
-    const int ndims = dst_desc->ndims;
+    const int ndims = dst_md->ndims;
     VCHECK_MATMUL(ndims >= 2 && ndims <= DNNL_MAX_NDIMS, VERBOSE_BAD_NDIMS,
             "dst", ndims);
-    VCHECK_MATMUL(everyone_is(ndims, src_desc->ndims, weights_desc->ndims),
+    VCHECK_MATMUL(everyone_is(ndims, src_md->ndims, weights_md->ndims),
             VERBOSE_INCONSISTENT_NDIMS, "src", "weights");
     VCHECK_MATMUL(IMPLICATION(with_bias, op_d.bias_desc.ndims == ndims),
             VERBOSE_BAD_NDIMS, "bias", op_d.bias_desc.ndims);
@@ -202,45 +155,30 @@ status_t matmul_desc_init(matmul_desc_t *matmul_desc,
     const int k_idx_src = m_idx + 1;
     const int k_idx_wei = m_idx;
     const int n_idx = ndims - 1;
-    VCHECK_MATMUL(dst_desc->dims[m_idx] == src_desc->dims[m_idx],
+    VCHECK_MATMUL(dst_md->dims[m_idx] == src_md->dims[m_idx],
             VERBOSE_INCONSISTENT_DIM, "dst", m_idx, "src", m_idx);
-    VCHECK_MATMUL(dst_desc->dims[n_idx] == weights_desc->dims[n_idx],
+    VCHECK_MATMUL(dst_md->dims[n_idx] == weights_md->dims[n_idx],
             VERBOSE_INCONSISTENT_DIM, "dst", n_idx, "weights", n_idx);
-    VCHECK_MATMUL(src_desc->dims[k_idx_src] == weights_desc->dims[k_idx_wei],
+    VCHECK_MATMUL(src_md->dims[k_idx_src] == weights_md->dims[k_idx_wei],
             VERBOSE_INCONSISTENT_DIM, "src", k_idx_src, "weights", k_idx_wei);
-    VCHECK_MATMUL(IMPLICATION(with_bias,
-                          one_of(op_d.bias_desc.dims[n_idx], 1,
-                                  dst_desc->dims[n_idx])),
+    VCHECK_MATMUL(
+            IMPLICATION(with_bias,
+                    one_of(op_d.bias_desc.dims[n_idx], 1, dst_md->dims[n_idx])),
             VERBOSE_INCONSISTENT_DIM, "bias", n_idx, "dst", n_idx);
-    VCHECK_MATMUL(IMPLICATION(with_bias,
-                          one_of(op_d.bias_desc.dims[m_idx], 1,
-                                  dst_desc->dims[m_idx])),
+    VCHECK_MATMUL(
+            IMPLICATION(with_bias,
+                    one_of(op_d.bias_desc.dims[m_idx], 1, dst_md->dims[m_idx])),
             VERBOSE_INCONSISTENT_DIM, "bias", m_idx, "dst", m_idx);
 
     const int bia_mask = with_bias
-            ? utils::get_dims_mask(dst_desc->dims, op_d.bias_desc.dims, ndims)
+            ? utils::get_dims_mask(dst_md->dims, op_d.bias_desc.dims, ndims)
             : 0;
-
-    // TODO: requirement is for innermost dim to be multiple of 2 for
-    // the memory to be byte aligned.
-
-    // s4/u4/f4 weights requires n to be multiple of 2 to be byte aligned
-    VCHECK_MATMUL(
-            IMPLICATION(utils::one_of(weights_desc->data_type, data_type::s4,
-                                data_type::u4, data_type::f4_e2m1),
-                    weights_desc->dims[n_idx] % 2 == 0),
-            VERBOSE_BAD_DIM, "weights", n_idx);
-    // s4/u4/f4 src requires k to be multiple of 2 to be byte aligned
-    VCHECK_MATMUL(IMPLICATION(utils::one_of(src_desc->data_type, data_type::s4,
-                                      data_type::u4, data_type::f4_e2m1),
-                          src_desc->dims[k_idx_src] % 2 == 0),
-            VERBOSE_BAD_DIM, "src", n_idx);
 
     // check if other dims match.
     for (int d = 0; d < ndims - 2; ++d) {
-        const dim_t s_dim = src_desc->dims[d];
-        const dim_t w_dim = weights_desc->dims[d];
-        const dim_t d_dim = dst_desc->dims[d];
+        const dim_t s_dim = src_md->dims[d];
+        const dim_t w_dim = weights_md->dims[d];
+        const dim_t d_dim = dst_md->dims[d];
         const dim_t b_dim = with_bias ? op_d.bias_desc.dims[d] : 0;
 
         if (one_of(DNNL_RUNTIME_DIM_VAL, s_dim, w_dim, d_dim, b_dim)) {
@@ -263,25 +201,11 @@ status_t matmul_desc_init(matmul_desc_t *matmul_desc,
         }
     }
 
-    op_d.accum_data_type = types::default_accum_data_type(src_desc->data_type,
-            weights_desc->data_type, dst_desc->data_type, prop_kind::forward);
+    op_d.accum_data_type = types::default_accum_data_type(src_md->data_type,
+            weights_md->data_type, dst_md->data_type, prop_kind::forward);
     VCHECK_MATMUL(op_d.accum_data_type != data_type::undef,
             VERBOSE_INVALID_DATATYPE, "accumulation");
-    *matmul_desc = op_d;
-    return status::success;
-}
-} // namespace impl
-} // namespace dnnl
-
-status_t dnnl_matmul_primitive_desc_create(
-        primitive_desc_iface_t **primitive_desc_iface, engine_t *engine,
-        const memory_desc_t *src_desc, const memory_desc_t *weights_desc,
-        const memory_desc_t *bias_desc, const memory_desc_t *dst_desc,
-        const primitive_attr_t *attr) {
-    auto matmul_desc = matmul_desc_t();
-    CHECK(matmul_desc_init(
-            &matmul_desc, src_desc, weights_desc, bias_desc, dst_desc));
-    CHECK(matmul_attr_check(matmul_desc, engine, attr));
+    CHECK(matmul_attr_check(op_d, engine, attr));
     return primitive_desc_create(primitive_desc_iface, engine,
-            (const op_desc_t *)&matmul_desc, nullptr, attr);
+            (const op_desc_t *)&op_d, nullptr, attr);
 }

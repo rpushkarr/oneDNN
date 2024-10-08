@@ -7,8 +7,6 @@ The following sparse encodings are supported:
 | Sparse encoding | Description
 | :---            | :---
 | csr             | Compressed Sparse Row (CSR) encoding
-| coo             | Co-ordinate Sparse (COO) encoding
-| packed          | Packed Sparse encoding
 
 ## Usage
 ```

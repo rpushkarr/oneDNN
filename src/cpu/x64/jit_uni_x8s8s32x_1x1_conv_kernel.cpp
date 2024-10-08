@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2024 Intel Corporation
+* Copyright 2019-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -48,7 +48,9 @@ template <cpu_isa_t isa, typename Vmm>
 _jit_uni_x8s8s32x_1x1_conv_kernel<isa, Vmm>::_jit_uni_x8s8s32x_1x1_conv_kernel(
         const jit_1x1_conv_conf_t &ajcp, const primitive_attr_t &attr,
         const memory_desc_t &dst_md)
-    : jit_generator(jit_name(), isa), jcp(ajcp), attr_(attr) {
+    : jit_generator(jit_name(), nullptr, MAX_CODE_SIZE, true, isa)
+    , jcp(ajcp)
+    , attr_(attr) {
     if (jcp.with_eltwise || jcp.with_binary || jcp.with_sum) {
         using namespace binary_injector;
         static constexpr bool preserve_gpr = true;
@@ -399,7 +401,8 @@ void _jit_uni_x8s8s32x_1x1_conv_kernel<isa, Vmm>::reduce_loop(
             for (int i_ur = 0; i_ur < ur; ++i_ur)
                 for (int i_load = 0; i_load < load_loop_blk; ++i_load) {
                     auto r = vreg_accum(load_loop_blk, i_load, i_ur);
-                    saturate_cvt_f32(r, vmm_zero, vmm_saturation, jcp.dst_dt);
+                    saturate_f32(r, vmm_zero, vmm_saturation, jcp.dst_dt);
+                    uni_vcvtps2dq(r, r);
                 }
         }
 
@@ -627,8 +630,7 @@ void _jit_uni_x8s8s32x_1x1_conv_kernel<isa, Vmm>::generate() {
     add(rsp, stack_space_needed);
     postamble();
 
-    if (jcp.with_eltwise)
-        postops_injector_->prepare_table(/* generate = */ true);
+    if (jcp.with_eltwise) postops_injector_->prepare_table();
 }
 
 template <cpu_isa_t isa>
@@ -704,7 +706,7 @@ status_t jit_uni_x8s8s32x_1x1_conv_kernel<isa>::init_conf(
 
     VDISPATCH_CONV_IC(
             !((jcp.dst_zero_point || jcp.src_zero_point) && jcp.with_dw_conv),
-            VERBOSE_UNSUPPORTED_FEATURE, "does not support zero-point");
+            "implementation does not support zero-point");
 
     format_tag_t dat_tag = utils::pick(
             ndims - 3, format_tag::nwc, format_tag::nhwc, format_tag::ndhwc);
@@ -890,7 +892,7 @@ status_t jit_uni_x8s8s32x_1x1_conv_kernel<isa>::init_conf(
             && jcp.reduce_dim % jcp.reduce_block == 0;
 
     assert(params_ok && "parameter values are inconsistent");
-    VDISPATCH_CONV_IC(params_ok, VERBOSE_BLOCKING_FAIL, "bad parameters");
+    VDISPATCH_CONV_IC(params_ok, VERBOSE_BLOCKING_FAIL);
 
     jcp.ur_tail = (jcp.with_dw_conv ? jcp.ow : jcp.bcast_dim) % jcp.ur;
 

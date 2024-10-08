@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2024 Intel Corporation
+* Copyright 2019-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -136,7 +136,7 @@ protected:
                           || supported_blocking(prec_i, p.fmt_i))
                         && (supported_format(p.fmt_o)
                                 || supported_blocking(prec_o, p.fmt_o))),
-                "Unsupported hip format tag/ data type");
+                "Unsupported cuda format tag/ data type");
 #endif
 
         catch_expected_failures([&]() { RunTest(eng_i, eng_o); },

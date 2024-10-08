@@ -271,25 +271,6 @@ dnnl_status_t DNNL_API dnnl_primitive_attr_clone(
 ///     otherwise.
 dnnl_status_t DNNL_API dnnl_primitive_attr_destroy(dnnl_primitive_attr_t attr);
 
-/// Returns probability for output dropout primitive attribute.
-///
-/// @param attr Primitive attributes.
-/// @param dropout_desc Output dropout memory descriptor
-/// @returns #dnnl_success on success and a status describing the error
-///     otherwise.
-dnnl_status_t DNNL_API dnnl_primitive_attr_get_dropout(
-        const_dnnl_primitive_attr_t attr,
-        const_dnnl_memory_desc_t *dropout_desc);
-
-/// Sets probability for output dropout primitive attribute.
-///
-/// @param attr Primitive attributes.
-/// @param dropout_desc Output dropout memory descriptor
-/// @returns #dnnl_success on success and a status describing the error
-///     otherwise.
-dnnl_status_t DNNL_API dnnl_primitive_attr_set_dropout(
-        dnnl_primitive_attr_t attr, const_dnnl_memory_desc_t dropout_desc);
-
 /// Returns the floating-point math mode primitive attribute.
 ///
 /// @param attr Primitive attributes.
@@ -494,26 +475,6 @@ dnnl_status_t DNNL_API dnnl_primitive_attr_set_zero_points_mask(
 dnnl_status_t DNNL_API dnnl_primitive_attr_set_zero_points(
         dnnl_primitive_attr_t attr, int arg, int mask, int ndims,
         const dnnl_dims_t group_dims, dnnl_data_type_t data_type);
-
-/// Sets the rounding mode attribute value for a given argument
-///
-/// @param attr Primitive attributes.
-/// @param arg Argument for which rounding mode should be set.
-/// @param mode Rounding mode to apply to the argument.
-/// @returns #dnnl_success on success and a status describing the error
-///     otherwise.
-dnnl_status_t DNNL_API dnnl_primitive_attr_set_rounding(
-        dnnl_primitive_attr_t attr, int arg, dnnl_rounding_mode_t mode);
-
-/// Returns the rounding mode attribute value for a given argument
-///
-/// @param attr Primitive attributes.
-/// @param arg Argument for which rounding mode query applies.
-/// @param mode Output rounding mode.
-/// @returns #dnnl_success on success and a status describing the error
-///     otherwise.
-dnnl_status_t DNNL_API dnnl_primitive_attr_get_rounding(
-        dnnl_primitive_attr_t attr, int arg, dnnl_rounding_mode_t *mode);
 
 /// Returns primitive attributes post-ops.
 ///
@@ -897,29 +858,6 @@ dnnl_status_t DNNL_API dnnl_memory_desc_create_with_csr_encoding(
         dnnl_memory_desc_t *memory_desc, int ndims, const dnnl_dims_t dims,
         dnnl_data_type_t data_type, dnnl_dim_t nnz, dnnl_data_type_t indices_dt,
         dnnl_data_type_t pointers_dt);
-
-/// Creates a memory descriptor for COO encoding.
-///
-/// The created memory descriptor will describe a memory object that
-/// contains n+1 buffers for an n-dimensional tensor.
-/// The buffers have the following meaning and assigned numbers (index):
-///  - 0: values
-///  - 1: indices for dimension 0
-///  - 2: indices for dimension 1 ...
-///  - n: indices for dimension n-1
-///
-/// @param memory_desc Output memory descriptor.
-/// @param ndims Number of dimensions.
-/// @param dims Array of dimensions.
-/// @param data_type Elements data type.
-/// @param nnz Number of non-zero entries.
-/// @param indices_dt Data type of indices.
-/// @returns #dnnl_success on success and a status describing the error
-///     otherwise.
-dnnl_status_t DNNL_API dnnl_memory_desc_create_with_coo_encoding(
-        dnnl_memory_desc_t *memory_desc, int ndims, const dnnl_dims_t dims,
-        dnnl_data_type_t data_type, dnnl_dim_t nnz,
-        dnnl_data_type_t indices_dt);
 
 /// Creates a memory descriptor for packed sparse encoding.
 ///
@@ -3660,12 +3598,8 @@ dnnl_status_t DNNL_API dnnl_set_jit_profiling_jitdumpdir(const char *dir);
 ///     The ISAs are only partially ordered:
 ///         - SSE41 < AVX < AVX2 < AVX2_VNNI < AVX2_VNNI_2,
 ///         - AVX2 < AVX512_CORE < AVX512_CORE_VNNI < AVX512_CORE_BF16
-///           < AVX10_1_512 < AVX10_1_512_AMX < AVX10_1_512_AMX_FP16,
-///         - AVX2_VNNI < AVX10_1_512.
-///     Aliases:
-///         - AVX512_CORE_FP16 = AVX10_1_512
-///         - AVX512_CORE_AMX = AVX10_1_512_AMX
-///         - AVX512_CORE_AMX_FP16 = AVX10_1_512_AMX_FP16
+///           < AVX512_CORE_FP16 < AVX512_CORE_AMX < AVX512_CORE_AMX_FP16,
+///         - AVX2_VNNI < AVX512_CORE_FP16.
 ///
 /// @sa @ref dev_guide_cpu_dispatcher_control for more details
 ///

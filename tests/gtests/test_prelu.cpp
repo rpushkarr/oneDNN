@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2024 Intel Corporation
+* Copyright 2022-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -48,7 +48,6 @@ protected:
         p = ::testing::TestWithParam<prelu_test_params_t>::GetParam();
 
         SKIP_IF_CUDA(true, "Prelu primitive not supported by CUDA");
-        SKIP_IF_HIP(true, "Prelu primitive not supported by HIP");
 
         SKIP_IF(unsupported_data_type(p.src_dt, p.wei_dt, p.dst_dt),
                 "Engine does not support this data type.");

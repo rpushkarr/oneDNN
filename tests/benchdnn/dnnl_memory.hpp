@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2024 Intel Corporation
+* Copyright 2017-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -135,10 +135,29 @@ struct dnn_mem_t {
     float get_elem(int64_t idx, int buffer_index = 0) const;
     void set_elem(int64_t idx, float value, int buffer_index = 0) const;
 
-    int64_t get_idx(int64_t logical_idx, int dims_mask, const int ndims,
-            const dims_t &groups = {}) const;
-    int64_t get_idx(int64_t logical_idx, int dims_mask) const {
-        return get_idx(logical_idx, dims_mask, ndims(), dims_t());
+    int64_t get_scale_idx(
+            int64_t data_idx, int scale_mask, const int ndims) const {
+        const auto &_dims = dims();
+        int64_t stride = 1;
+        int64_t offset = 0;
+
+        if (scale_mask != 0) {
+            for (int i = 0; i < ndims; ++i) {
+                int d = ndims - 1 - i;
+                auto pos = data_idx % _dims[d];
+                data_idx /= _dims[d];
+                if (scale_mask & (1 << d)) {
+                    offset += pos * stride;
+                    stride *= _dims[d];
+                }
+            }
+        }
+
+        return offset;
+    }
+
+    int64_t get_scale_idx(int64_t data_idx, int scale_mask) const {
+        return get_scale_idx(data_idx, scale_mask, ndims());
     }
 
     dnnl_engine_t engine() const { return engine_; }
@@ -172,10 +191,6 @@ struct dnn_mem_t {
     static benchdnn_dnnl_wrapper_t<dnnl_memory_desc_t> init_csr_md(int ndims,
             const dnnl_dims_t dims, dnnl_data_type_t data_type, dnnl_dim_t nnz,
             dnnl_data_type_t indices_dt, dnnl_data_type_t pointers_dt);
-    // Initializes memory descriptor for COO encoding.
-    static benchdnn_dnnl_wrapper_t<dnnl_memory_desc_t> init_coo_md(int ndims,
-            const dnnl_dims_t dims, dnnl_data_type_t data_type, dnnl_dim_t nnz,
-            dnnl_data_type_t indices_dt);
     // Initializes memory descriptor for packed encoding.
     static benchdnn_dnnl_wrapper_t<dnnl_memory_desc_t> init_sparse_packed_md(
             int ndims, const dnnl_dims_t dims, dnnl_data_type_t data_type,

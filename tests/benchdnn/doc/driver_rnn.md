@@ -10,8 +10,6 @@ where *rnn-knobs* are:
  - `--prop={FWD_I [default], FWD_D, BWD_DW}` -- dnnl_prop_kind_t.
             Refer to [direction](knobs_dir.md) for details.
  - `--cfg={f32 [default], ...}` -- refer to ``Configurations`` below.
- - `--tag={any:any:any [default], ...}` -- physical src, weights and dst memory
-            layouts. Refer to [tags](knobs_tag.md) for details.
  - `--alg={VANILLA_RNN [default], VANILLA_LSTM, VANILLA_GRU, LBR_GRU,
             VANILLA_AUGRU, LBR_AUGRU}` -- RNN algorithm.
  - `--direction={left2right [default], right2left, concat, sum}` -- RNN
@@ -44,11 +42,12 @@ where *rnn-knobs* are:
  - `--mb=INT` -- override `mb` (minibatch) value specified in the problem
             descriptor. When `INT` is set to `0` (the default), use `mb` value
             specified in the problem descriptor.
+ - `--attr-fpmath=STRING` -- fpmath mode primitive attribute. `strict` math mode
+            is set by default. Refer to [attributes](knobs_attr.md) for details.
  - `--flags=[|O]` -- RNN flags, default `undef` (no flags); where multiple
             simultaneous flags are supported.
             `O` is dnnl_rnn_flags_diff_weights_overwrite;
             Refer to [RNN primitive](https://oneapi-src.github.io/oneDNN/dev_guide_rnn.html) for details.
- - Any attributes options. Refer to [attributes](knobs_attr.md) for details.
 
 and *rnn-desc* is a problem descriptor. The canonical form is:
 ```

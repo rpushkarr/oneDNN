@@ -29,7 +29,7 @@
 
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
 #include "oneapi/dnnl/dnnl_ocl.hpp"
-#include "src/xpu/ocl/usm_utils.hpp"
+#include "src/gpu/ocl/ocl_usm_utils.hpp"
 #endif
 
 #include "tests/test_thread.hpp"
@@ -206,33 +206,12 @@ float dnn_mem_t::get_elem(int64_t idx, int buffer_index) const {
         case dnnl_bf16:
             elem = static_cast<dnnl::impl::bfloat16_t *>(data)[idx];
             break;
-        case dnnl_e8m0:
-            elem = static_cast<dnnl::impl::float8_e8m0_t *>(data)[idx];
-            break;
         case dnnl_f8_e5m2:
             elem = static_cast<dnnl::impl::float8_e5m2_t *>(data)[idx];
             break;
         case dnnl_f8_e4m3:
             elem = static_cast<dnnl::impl::float8_e4m3_t *>(data)[idx];
             break;
-        case dnnl_s4: {
-            dnnl::impl::nibble2_t nibble_pair(
-                    reinterpret_cast<uint8_t *>(data)[idx / 2]);
-            elem = dnnl::impl::int4_t(nibble_pair.get(idx % 2));
-            break;
-        }
-        case dnnl_u4: {
-            dnnl::impl::nibble2_t nibble_pair(
-                    reinterpret_cast<uint8_t *>(data)[idx / 2]);
-            elem = dnnl::impl::uint4_t(nibble_pair.get(idx % 2));
-            break;
-        }
-        case dnnl_f4_e2m1: {
-            dnnl::impl::nibble2_t nibble_pair(
-                    reinterpret_cast<uint8_t *>(data)[idx / 2]);
-            elem = dnnl::impl::float4_e2m1_t(nibble_pair.get(idx % 2));
-            break;
-        }
         default: assert(!"bad data type");
     }
     return elem;
@@ -249,97 +228,14 @@ void dnn_mem_t::set_elem(int64_t idx, float value, int buffer_index) const {
         case dnnl_f64: ((double *)data)[idx] = value; break;
         case dnnl_f16: ((dnnl::impl::float16_t *)data)[idx] = value; break;
         case dnnl_bf16: ((dnnl::impl::bfloat16_t *)data)[idx] = value; break;
-        case dnnl_e8m0: ((dnnl::impl::float8_e8m0_t *)data)[idx] = value; break;
         case dnnl_f8_e5m2:
             ((dnnl::impl::float8_e5m2_t *)data)[idx] = value;
             break;
         case dnnl_f8_e4m3:
             ((dnnl::impl::float8_e4m3_t *)data)[idx] = value;
             break;
-        case dnnl_s4: {
-            auto dst_val = ((dnnl::impl::nibble2_t *)data)[idx / 2];
-            dst_val.set(dnnl::impl::int4_t(value).raw_bits_, idx % 2);
-            ((dnnl::impl::nibble2_t *)data)[idx / 2] = dst_val;
-            break;
-        }
-        case dnnl_u4: {
-            auto dst_val = ((dnnl::impl::nibble2_t *)data)[idx / 2];
-            dst_val.set(dnnl::impl::uint4_t(value).raw_bits_, idx % 2);
-            ((dnnl::impl::nibble2_t *)data)[idx / 2] = dst_val;
-            break;
-        }
-        case dnnl_f4_e2m1: {
-            auto dst_val = ((dnnl::impl::nibble2_t *)data)[idx / 2];
-            dst_val.set(dnnl::impl::float4_e2m1_t(value).raw_bits_, idx % 2);
-            ((dnnl::impl::nibble2_t *)data)[idx / 2] = dst_val;
-            break;
-        }
         default: assert(!"bad data type");
     }
-}
-
-// Returns an updated logical index based on input `logical_index` and
-// `dims_mask`.
-// `logical_idx` is a generally composed index where dims[ndims - 1] is most
-// dense and dims[0] is least dense dimensions, as tensor in `abx` format.
-// `dims_mask` represents dimensions to keep or remove. A value is composed of
-// number of bits equal to `ndims` and value of `1` indicates the dimension to
-// present in final calculation. E.g., mask=0 means a single value, and mask=2,
-// or 1 << 1, means to keep dims[1] only.
-// `ndims` allows to reduce the number of dimensions from innermost direction.
-// It is used to find an index in batched dimensions. E.g., if ndims() returns
-// `4`, but `ndims` argument is passed as `2`, it will count only first two
-// dimensions instead of all 4.
-// `groups` is an extension of scales when their dimensions are different.
-// In this case, it's required to adjust dimensions values according to group
-// values to properly compute stride in a smaller tensor. The definition is
-// aligned with the API and expects groups of size 2 or empty.
-// When `ndims()/ndims` are bigger than 2, groups are applied only to two most
-// dense dimensions, which is aligned with 2D matmul definition. E.g., dims=2x6,
-// mask=3, ndims=2 and groups=1x3; in this case indices 0,1,2 will return 0 as
-// those indices represent the first group. 3,4,5 will return 1. Changing the
-// example like dims=6x2, mask=3, ndims=2 and groups=3x1 will change ouput as
-// well due to groups are dense not over the last dimension. The match will look
-// like this: 0->0, 1->1, 2->0, 3->1, ..., 6->2, ..., 11->4.
-//
-// Helps to find an index of smaller tensor in bigger one, e.g., scales. Scales
-// are usually represented by a 1D array and have a mask indicating dims to be
-// applied for. It coincides with `dims_mask`.
-// Another usage is to identify an index for operations that support broadcast
-// over different dimensions, e.g., matmul batch dimensions, or binary
-// primitive.
-//
-// Example: there's a tensor 3x4 and scales with mask=2, which means to apply
-// scales over the dimension of 4. Passing indices from 0 to 3 will return
-// values from 0 to 3 correspondently. However, passing `logical_idx` of 4 will
-// return 0, as 4 is a logical representation of point 1x0.
-int64_t dnn_mem_t::get_idx(int64_t logical_idx, int dims_mask, const int ndims,
-        const dims_t &groups) const {
-    if (dims_mask == 0) return 0;
-
-    const auto &dims = this->dims();
-    int64_t stride = 1;
-    int64_t offset = 0;
-
-    assert(groups.empty() || groups.size() == 2);
-    assert(groups.size() <= static_cast<size_t>(ndims));
-    dims_t groups_ext(ndims, 1);
-    if (!groups.empty()) {
-        groups_ext[ndims - 2] = groups[0];
-        groups_ext[ndims - 1] = groups[1];
-    }
-
-    for (int i = 0; i < ndims; ++i) {
-        int d = ndims - 1 - i;
-        auto pos = logical_idx % dims[d];
-        logical_idx /= dims[d];
-        if (dims_mask & (1 << d)) {
-            offset += (pos / groups_ext[d]) * stride;
-            stride *= (dims[d] / groups_ext[d]);
-        }
-    }
-
-    return offset;
 }
 
 // Creates a memory object from the underlying buffer of an existing memory
@@ -347,6 +243,8 @@ int64_t dnn_mem_t::get_idx(int64_t logical_idx, int dims_mask, const int ndims,
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL || defined(DNNL_WITH_SYCL)
 static int init_memory(
         dnnl_memory_t *ret, const dnnl_memory_desc_t &md, dnnl_memory_t mem) {
+    void *handle;
+    DNN_SAFE(dnnl_memory_get_data_handle(mem, &handle), CRIT);
 
     dnnl_engine_t engine;
     DNN_SAFE(dnnl_memory_get_engine(mem, &engine), CRIT);
@@ -356,43 +254,22 @@ static int init_memory(
 
     *ret = nullptr;
 
-    const int nhandles = query_md_num_handles(md);
-    std::vector<void *> handles(nhandles);
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-    for (int i = 0; i < nhandles; i++)
-        DNN_SAFE(dnnl_memory_get_data_handle_v2(mem, &handles[i], i), CRIT);
-#else
-    DNN_SAFE(dnnl_memory_get_data_handle(mem, &handles[0]), CRIT);
-#endif
-
     if (is_opencl) {
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
         dnnl_ocl_interop_memory_kind_t mem_kind;
         DNN_SAFE(dnnl_ocl_interop_memory_get_memory_kind(mem, &mem_kind), CRIT);
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-        DNN_SAFE(dnnl_ocl_interop_memory_create_v2(ret, md, engine, mem_kind,
-                         (int)handles.size(), handles.data()),
-                CRIT);
-#else
         DNN_SAFE(dnnl_ocl_interop_memory_create(
-                         ret, md, engine, mem_kind, handles[0]),
+                         ret, md, engine, mem_kind, handle),
                 CRIT);
-#endif
 #endif
     } else if (is_sycl) {
 #ifdef DNNL_WITH_SYCL
         dnnl_sycl_interop_memory_kind_t mem_kind;
         DNN_SAFE(
                 dnnl_sycl_interop_memory_get_memory_kind(mem, &mem_kind), CRIT);
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-        DNN_SAFE(dnnl_sycl_interop_memory_create_v2(ret, md, engine, mem_kind,
-                         (int)handles.size(), handles.data()),
-                CRIT);
-#else
         DNN_SAFE(dnnl_sycl_interop_memory_create(
-                         ret, md, engine, mem_kind, handles[0]),
+                         ret, md, engine, mem_kind, handle),
                 CRIT);
-#endif
 #endif
     }
 
@@ -471,7 +348,7 @@ void dnn_mem_t::memset(int value, size_t size) const {
             case memory_kind_ext_t::usm:
             case memory_kind_ext_t::usm_device:
             case memory_kind_ext_t::usm_shared: {
-                DNN_SAFE_V(dnnl::impl::xpu::ocl::usm::memset(
+                DNN_SAFE_V(dnnl::impl::gpu::ocl::usm::memset(
                         stream, mem_handle, value, size));
                 DNN_SAFE_V(dnnl_stream_wait(stream));
                 return;
@@ -542,10 +419,6 @@ size_t dnn_mem_t::pad_memory_size(
 dnnl_memory_desc_t dnn_mem_t::pad_memory_desc(const_dnnl_memory_desc_t md,
         dnnl_engine_kind_t engine_kind, bool *was_padded) {
     if (was_padded) *was_padded = false;
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-    // TODO: add padded memory descriptor support for sparse memory.
-    if (query_md_format_kind(md) == dnnl_format_kind_sparse) return nullptr;
-#endif
     size_t old_sz = dnnl_memory_desc_get_size(md);
     if (old_sz == 0 || !has_bench_mode_bit(mode_bit_t::corr)
             || engine_kind == dnnl_cpu)
@@ -600,15 +473,6 @@ benchdnn_dnnl_wrapper_t<dnnl_memory_desc_t> dnn_mem_t::init_csr_md(int ndims,
     return md;
 }
 
-benchdnn_dnnl_wrapper_t<dnnl_memory_desc_t> dnn_mem_t::init_coo_md(int ndims,
-        const dnnl_dims_t dims, dnnl_data_type_t data_type, dnnl_dim_t nnz,
-        dnnl_data_type_t indices_dt) {
-    dnnl_memory_desc_t md {};
-    DNN_SAFE_V(dnnl_memory_desc_create_with_coo_encoding(
-            &md, ndims, dims, data_type, nnz, indices_dt));
-    return md;
-}
-
 benchdnn_dnnl_wrapper_t<dnnl_memory_desc_t> dnn_mem_t::init_sparse_packed_md(
         int ndims, const dnnl_dims_t dims, dnnl_data_type_t data_type,
         dnnl_dim_t nnz) {
@@ -623,18 +487,9 @@ int dnn_mem_t::initialize_memory_create_sycl(const handle_info_t &handle_info) {
 #ifdef DNNL_WITH_SYCL
     if (handle_info.is_host_ptr) {
         // Ignore memory_kind with host pointers and force USM.
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-        const int nhandles = query_md_num_handles(md_);
-        std::vector<void *> handles(nhandles, handle_info.ptr);
-        DNN_SAFE(dnnl_sycl_interop_memory_create_v2(&m_, md_, engine_,
-                         dnnl_sycl_interop_usm, (int)handles.size(),
-                         handles.data()),
-                CRIT);
-#else
         DNN_SAFE(dnnl_sycl_interop_memory_create(&m_, md_, engine_,
                          dnnl_sycl_interop_usm, handle_info.ptr),
                 CRIT);
-#endif
         return OK;
     }
 
@@ -648,18 +503,9 @@ int dnn_mem_t::initialize_memory_create_sycl(const handle_info_t &handle_info) {
                     = (memory_kind == memory_kind_ext_t::usm
                                     ? dnnl_sycl_interop_usm
                                     : dnnl_sycl_interop_buffer);
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-            const int nhandles = query_md_num_handles(md_);
-            std::vector<void *> handles(nhandles, handle_info.ptr);
-            DNN_SAFE(dnnl_sycl_interop_memory_create_v2(&m_padded_, md_padded,
-                             engine_, mem_kind, (int)handles.size(),
-                             handles.data()),
-                    CRIT);
-#else
             DNN_SAFE(dnnl_sycl_interop_memory_create(&m_padded_, md_padded,
                              engine_, mem_kind, handle_info.ptr),
                     CRIT);
-#endif
             SAFE(init_memory(&m_, md_, m_padded_), CRIT);
             break;
         }
@@ -667,39 +513,21 @@ int dnn_mem_t::initialize_memory_create_sycl(const handle_info_t &handle_info) {
         case memory_kind_ext_t::usm_shared: {
             SAFE(handle_info.is_allocate() ? OK : FAIL, CRIT);
             is_data_owner_ = true;
-
+            size_t sz = dnnl_memory_desc_get_size(md_padded);
             auto eng = dnnl::engine(engine_, true);
             auto dev = dnnl::sycl_interop::get_device(eng);
             auto ctx = dnnl::sycl_interop::get_context(eng);
-
-            const int nhandles = query_md_num_handles(md_);
-            for (int i = 0; i < nhandles; i++) {
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-                size_t sz = dnnl_memory_desc_get_size_v2(md_padded, i);
-#else
-                size_t sz = dnnl_memory_desc_get_size(md_padded);
-#endif
-                if (memory_kind == memory_kind_ext_t::usm_device) {
-                    data_.push_back(::sycl::malloc_device(sz, dev, ctx));
-                } else {
-                    data_.push_back(::sycl::malloc_shared(sz, dev, ctx));
-                }
-                if (sz > 0 && !data_[i]) {
-                    for (void *p : data_)
-                        ::sycl::free(p, ctx);
-                    DNN_SAFE(dnnl_out_of_memory, CRIT);
-                }
+            if (memory_kind == memory_kind_ext_t::usm_device) {
+                data_.push_back(::sycl::malloc_device(sz, dev, ctx));
+            } else {
+                data_.push_back(::sycl::malloc_shared(sz, dev, ctx));
             }
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-            DNN_SAFE(dnnl_sycl_interop_memory_create_v2(&m_padded_, md_padded,
-                             engine_, dnnl_sycl_interop_usm, (int)data_.size(),
-                             data_.data()),
+            assert(data_.size() == 1);
+            DNN_SAFE((sz > 0 && !data_[0]) ? dnnl_out_of_memory : dnnl_success,
                     CRIT);
-#else
             DNN_SAFE(dnnl_sycl_interop_memory_create(&m_padded_, md_padded,
                              engine_, dnnl_sycl_interop_usm, data_[0]),
                     CRIT);
-#endif
             SAFE(init_memory(&m_, md_, m_padded_), CRIT);
             break;
         }
@@ -718,18 +546,9 @@ int dnn_mem_t::initialize_memory_create_opencl(
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
     if (handle_info.is_host_ptr) {
         // Ignore memory_kind with host pointers and force USM.
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-        const int nhandles = query_md_num_handles(md_);
-        std::vector<void *> handles(nhandles, handle_info.ptr);
-        DNN_SAFE(dnnl_ocl_interop_memory_create_v2(&m_, md_, engine_,
-                         dnnl_ocl_interop_usm, (int)handles.size(),
-                         handles.data()),
-                CRIT);
-#else
         DNN_SAFE(dnnl_ocl_interop_memory_create(&m_, md_, engine_,
                          dnnl_ocl_interop_usm, handle_info.ptr),
                 CRIT);
-#endif
         return OK;
     }
 
@@ -745,56 +564,29 @@ int dnn_mem_t::initialize_memory_create_opencl(
                     = (memory_kind == memory_kind_ext_t::usm
                                     ? dnnl_ocl_interop_usm
                                     : dnnl_ocl_interop_buffer);
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-            const int nhandles = query_md_num_handles(md_);
-            std::vector<void *> handles(nhandles, handle_info.ptr);
-            DNN_SAFE(dnnl_ocl_interop_memory_create_v2(&m_padded_, md_padded,
-                             engine_, mem_kind, (int)handles.size(),
-                             handles.data()),
-                    CRIT);
-#else
             DNN_SAFE(dnnl_ocl_interop_memory_create(&m_padded_, md_padded,
                              engine_, mem_kind, handle_info.ptr),
                     CRIT);
-#endif
             SAFE(init_memory(&m_, md_, m_padded_), CRIT);
             break;
         }
         case memory_kind_ext_t::usm_device:
         case memory_kind_ext_t::usm_shared: {
             is_data_owner_ = true;
-
-            const int nhandles = query_md_num_handles(md_);
-            for (int i = 0; i < nhandles; i++) {
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-                size_t sz = dnnl_memory_desc_get_size_v2(md_padded, i);
-#else
-                size_t sz = dnnl_memory_desc_get_size(md_padded);
-#endif
-                if (memory_kind == memory_kind_ext_t::usm_device) {
-                    data_.push_back(dnnl::impl::xpu::ocl::usm::malloc_device(
-                            engine_, sz));
-                } else {
-                    data_.push_back(dnnl::impl::xpu::ocl::usm::malloc_shared(
-                            engine_, sz));
-                }
-
-                if (sz > 0 && !data_[i]) {
-                    for (void *p : data_)
-                        dnnl::impl::xpu::ocl::usm::free(engine_, p);
-                    DNN_SAFE(dnnl_out_of_memory, CRIT);
-                }
+            size_t sz = dnnl_memory_desc_get_size(md_padded);
+            if (memory_kind == memory_kind_ext_t::usm_device) {
+                data_.push_back(
+                        dnnl::impl::gpu::ocl::usm::malloc_device(engine_, sz));
+            } else {
+                data_.push_back(
+                        dnnl::impl::gpu::ocl::usm::malloc_shared(engine_, sz));
             }
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-            DNN_SAFE(dnnl_ocl_interop_memory_create_v2(&m_padded_, md_padded,
-                             engine_, dnnl_ocl_interop_usm, (int)data_.size(),
-                             data_.data()),
+            assert(data_.size() == 1);
+            DNN_SAFE((sz > 0 && !data_[0]) ? dnnl_out_of_memory : dnnl_success,
                     CRIT);
-#else
             DNN_SAFE(dnnl_ocl_interop_memory_create(&m_padded_, md_padded,
                              engine_, dnnl_ocl_interop_usm, data_[0]),
                     CRIT);
-#endif
             SAFE(init_memory(&m_, md_, m_padded_), CRIT);
             break;
         }
@@ -930,7 +722,7 @@ static int cleanup_opencl(
         case memory_kind_ext_t::usm_device:
         case memory_kind_ext_t::usm_shared:
             for (void *p : data)
-                dnnl::impl::xpu::ocl::usm::free(engine, p);
+                dnnl::impl::gpu::ocl::usm::free(engine, p);
             break;
         default: break;
     }
@@ -1044,6 +836,8 @@ static int check_zero_padding_impl(
     int errors = 0;
     std::atomic<int> ok(true);
 
+    const T *mem_ptr = (const T *)mem;
+
     for (int dim_m_idx = 0; dim_m_idx < ndims; ++dim_m_idx) {
         if (dims[dim_m_idx] == pdims[dim_m_idx]) continue;
 
@@ -1054,7 +848,7 @@ static int check_zero_padding_impl(
             for (dnnl_dim_t m = dims[dim_m_idx]; m < pdims[dim_m_idx]; ++m) {
                 auto l_idx = (l * pdims[dim_m_idx] + m) * dim_r + r;
                 auto idx = md_off_l(nullptr, mem, l_idx, true);
-                if (!(mem.get_elem(idx) == 0)) ok = false;
+                if (!(mem_ptr[idx] == 0)) ok = false;
             }
         });
 
@@ -1068,7 +862,7 @@ static int check_zero_padding_impl(
                 dnnl_dims_t pos = {};
                 auto idx = md_off_l(pos, mem, l_idx, true);
 
-                bool idx_ok = (mem.get_elem(idx) == 0);
+                bool idx_ok = (mem_ptr[idx] == 0);
                 if (!idx_ok) errors++;
 
                 const bool dump = (!idx_ok && (errors < 10 || verbose >= 10))
@@ -1104,7 +898,6 @@ int check_zero_padding(
         case dnnl_data_type_undef:
             return OK;
 
-            CASE(dnnl_e8m0, dnnl::impl::float8_e8m0_t);
             CASE(dnnl_f8_e5m2, dnnl::impl::float8_e5m2_t);
             CASE(dnnl_f8_e4m3, dnnl::impl::float8_e4m3_t);
             CASE(dnnl_bf16, dnnl::impl::bfloat16_t);
@@ -1114,9 +907,7 @@ int check_zero_padding(
             CASE(dnnl_s32, int32_t);
             CASE(dnnl_s8, int8_t);
             CASE(dnnl_u8, uint8_t);
-            CASE(dnnl_s4, dnnl::impl::int4_t);
-            CASE(dnnl_u4, dnnl::impl::uint4_t);
-            CASE(dnnl_f4_e2m1, dnnl::impl::float4_e2m1_t);
+
         default: assert(!"bad data_type");
     };
 #undef CASE

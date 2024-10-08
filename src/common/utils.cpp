@@ -19,12 +19,12 @@
 #include <windows.h>
 #endif
 
-#if defined(__unix__) || defined(__APPLE__) || defined(__FreeBSD__) \
-        || defined(__Fuchsia__)
+#if defined __unix__ || defined __APPLE__ || defined __FreeBSD__ \
+        || defined __Fuchsia__
 #include <unistd.h>
 #endif
 
-#if defined(__unix__) || defined(__APPLE__)
+#ifdef __unix__
 #include <sys/stat.h>
 #include <sys/types.h>
 #endif
@@ -41,7 +41,6 @@
 
 #include "memory_debug.hpp"
 #include "utils.hpp"
-#include "verbose.hpp"
 
 #if DNNL_CPU_RUNTIME != DNNL_RUNTIME_NONE
 #include "cpu/platform.hpp"
@@ -125,49 +124,7 @@ std::string getenv_string_user(const char *name) {
     return value;
 }
 
-status_t check_for_symlinks(const char *filename, bool *res) {
-#ifdef _WIN32
-    DWORD attr = GetFileAttributes(filename);
-
-    // checking for ERROR_FILE_NOT_FOUND allows the application to open
-    // new files without raising an exception
-    if (attr == INVALID_FILE_ATTRIBUTES)
-        return (GetLastError() == ERROR_FILE_NOT_FOUND)
-                ? status::success
-                : status::invalid_arguments;
-    *res = (attr & FILE_ATTRIBUTE_REPARSE_POINT);
-    return status::success;
-#else
-    struct stat finfo;
-    // checking for ENOENT allows the application to open new files without
-    // raising an exception
-    if (lstat(filename, &finfo) != 0)
-        return (errno == ENOENT) ? status::success : status::invalid_arguments;
-    *res = (finfo.st_mode & S_IFMT) == S_IFLNK;
-    return status::success;
-#endif
-}
-
 FILE *fopen(const char *filename, const char *mode) {
-    bool is_symlink = false;
-    status_t fattr_status = check_for_symlinks(filename, &is_symlink);
-
-    // For any return status other than status::success, the file IO operation
-    // is abandoned implying a major issue in retrieving the file
-    if (fattr_status != status::success) {
-        VERROR(common, common, "error reading file attributes for %s",
-                filename);
-        return nullptr;
-    }
-
-    // The symlink flag is updated and checked only after the file attributes are
-    // successfully read, avoiding the use of an uninitialized variable.
-    if (is_symlink) {
-        VERROR(common, common,
-                "cannot open %s - specified file is a symbolic link", filename);
-        return nullptr;
-    }
-
 #ifdef _WIN32
     FILE *fp = NULL;
     return ::fopen_s(&fp, filename, mode) ? NULL : fp;
@@ -326,14 +283,6 @@ bool is_destroying_cache_safe() {
         //    3. oneDNN is statically linked in an executable which is done
         //       and now the process terminates In all these scenarios
         //       content of the cache can be safely destroyed.
-        //
-        // Note: the first 2 scenarios can still cause some issues in the
-        // case of OpenCL runtime. There doesn't seem to be a way to distinguish
-        // the 2 scenarios from the 3rd one therefore it's always
-        // considered unsafe to clean up the cache.
-#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
-        return false;
-#endif
         return true;
     }
 #else
@@ -422,9 +371,7 @@ thread_local dnnl::threadpool_interop::threadpool_iface *active_threadpool
 
 void DNNL_API activate_threadpool(
         dnnl::threadpool_interop::threadpool_iface *tp) {
-    // The assert here is put to prevent from activating a test threadpool while
-    // the library one was left activating(not deactivated)
-    assert(IMPLICATION(active_threadpool, active_threadpool == tp));
+    assert(!active_threadpool);
     if (!active_threadpool) active_threadpool = tp;
 }
 

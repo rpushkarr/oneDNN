@@ -18,7 +18,6 @@
 #include <float.h>
 #include <math.h>
 
-#include <algorithm>
 #include "common/c_types_map.hpp"
 #include "common/dnnl_thread.hpp"
 #include "common/math_utils.hpp"
@@ -40,15 +39,6 @@ status_t ref_matmul_t::execute_ref(const exec_ctx_t &ctx) const {
     const auto src = CTX_IN_MEM(const void *, DNNL_ARG_SRC);
     const auto weights = CTX_IN_MEM(const void *, DNNL_ARG_WEIGHTS);
     const auto bias = CTX_IN_MEM(const void *, DNNL_ARG_BIAS);
-
-    const auto p = CTX_IN_MEM(const float *, DNNL_ARG_ATTR_DROPOUT_PROBABILITY);
-    const auto seed = CTX_IN_MEM(const uint32_t *, DNNL_ARG_ATTR_DROPOUT_SEED);
-    const auto rnd_seed
-            = CTX_IN_MEM(const uint32_t *, DNNL_ARG_ATTR_ROUNDING_SEED);
-    auto dropout_mask = CTX_OUT_CLEAN_MEM(
-            unsigned char *, DNNL_ARG_ATTR_DROPOUT_MASK, status);
-    CHECK(status);
-
     auto dst = CTX_OUT_CLEAN_MEM(void *, DNNL_ARG_DST, status);
     CHECK(status);
 
@@ -56,15 +46,10 @@ status_t ref_matmul_t::execute_ref(const exec_ctx_t &ctx) const {
     DEFINE_ARG_SCALES_BUFFER(wei_scales, DNNL_ARG_WEIGHTS);
     DEFINE_ARG_SCALES_BUFFER(dst_scales, DNNL_ARG_DST);
 
-    DEFINE_ZERO_POINTS_BUFFER(wei_zero_points, DNNL_ARG_WEIGHTS);
-
     const auto src_d = ctx.memory_mdw(DNNL_ARG_SRC, pd()->src_md());
     const auto weights_d = ctx.memory_mdw(DNNL_ARG_WEIGHTS, pd()->weights_md());
     const auto dst_d = ctx.memory_mdw(DNNL_ARG_DST, pd()->dst_md());
     const auto bia_d = ctx.memory_mdw(DNNL_ARG_BIAS, pd()->weights_md(1));
-
-    const memory_desc_wrapper dropout_mask_d(
-            pd()->attr()->dropout_.dropout_desc_);
 
     if (src_d.has_zero_dim() || weights_d.has_zero_dim()
             || dst_d.has_zero_dim())
@@ -81,9 +66,9 @@ status_t ref_matmul_t::execute_ref(const exec_ctx_t &ctx) const {
     const dim_t batch = helper.batch();
 
     // Weights decompression
+    DEFINE_ZERO_POINTS_BUFFER(wei_zero_points, DNNL_ARG_WEIGHTS);
     const bool with_wei_decompression
-            = utils::one_of(weights_d.data_type(), data_type::s8, data_type::u8,
-                      data_type::s4, data_type::u4)
+            = utils::one_of(weights_d.data_type(), data_type::s8, data_type::u8)
             && pd()->attr()->fpmath_.apply_to_int_;
     const auto &attr_zps = pd()->attr()->zero_points_;
     const bool with_wei_zero_points
@@ -128,8 +113,6 @@ status_t ref_matmul_t::execute_ref(const exec_ctx_t &ctx) const {
     const auto wei_scale_group_k = wei_scale_group_ndim > 0
             ? attr_scales.get(DNNL_ARG_WEIGHTS).group_dims_[0]
             : 1;
-
-    auto dst_rnd_mode = pd()->attr()->rounding_mode_.get(DNNL_ARG_DST);
 
     // mm kernel
     auto ker = [&](const dims_t dst_dims_idx, dim_t m, dim_t n) {
@@ -181,44 +164,32 @@ status_t ref_matmul_t::execute_ref(const exec_ctx_t &ctx) const {
     };
 
     auto sum_dt = pd()->attr()->post_ops_.get_sum_dt(dst_d.data_type());
-    bool with_dropout = !pd()->attr()->dropout_.has_default_values();
 
     // computations
-    // Note: If dst type is < 8 bits, we cannot split a byte during
-    // store or we get a race condition.  To simplify logic, we just
-    // emit fewer threads
-    int nthr = batch * std::min<dim_t>(M / 2, 1) * std::min<dim_t>(N / 2, 1);
-    parallel_nd_ext(
-            nthr, batch, M, N, [&](int, int, dim_t mb, dim_t m, dim_t n) {
-                dims_t dst_dims_idx;
-                // account for M, N dims for index calculations
-                const size_t l_offset = mb * M * N + m * N + n;
-                utils::l_dims_by_l_offset(
-                        dst_dims_idx, l_offset, dst_d.dims(), ndims);
-                float d = ker(dst_dims_idx, m, n);
-                if (with_src_scales) d *= src_scales[0];
-                if (with_wei_scales && !with_wei_decompression)
-                    d *= wei_scales[wei_scale_stride_n * n];
-                if (bias) d += ker_bias(dst_dims_idx);
+    parallel_nd(batch, M, N, [&](dim_t mb, dim_t m, dim_t n) {
+        dims_t dst_dims_idx;
+        // account for M, N dims for index calculations
+        const size_t l_offset = mb * M * N + m * N + n;
+        utils::l_dims_by_l_offset(dst_dims_idx, l_offset, dst_d.dims(), ndims);
+        float d = ker(dst_dims_idx, m, n);
+        if (with_src_scales) d *= src_scales[0];
+        if (with_wei_scales && !with_wei_decompression)
+            d *= wei_scales[wei_scale_stride_n * n];
+        if (bias) d += ker_bias(dst_dims_idx);
 
-                const auto dst_off = dst_d.off_v(dst_dims_idx);
-                if (non_default_attrs) {
-                    if (with_dropout)
-                        d = ref_dropout(d, dropout_mask, dst_off, *p, *seed);
-                    ref_post_ops_t::args_t args;
-                    args.dst_val = io::load_float_value(sum_dt, dst, dst_off);
-                    args.ctx = &ctx;
-                    args.l_offset = l_offset;
-                    args.dst_md = pd()->dst_md();
-                    ref_post_ops->execute(d, args);
-                }
-                if (with_dst_scales) d *= dst_scales[0];
-                if (dst_rnd_mode == rounding_mode::stochastic)
-                    d = math::stochastic_round_fwd(
-                            d, dst_off, rnd_seed[0], dst_d.data_type());
-                io::store_float_value(dst_d.data_type(), d, dst, dst_off);
-                utils::dim_iterator(dst_d.dims(), dst_dims_idx, batch_ndims);
-            });
+        const auto dst_off = dst_d.off_v(dst_dims_idx);
+        if (non_default_attrs) {
+            ref_post_ops_t::args_t args;
+            args.dst_val = io::load_float_value(sum_dt, dst, dst_off);
+            args.ctx = &ctx;
+            args.l_offset = l_offset;
+            args.dst_md = pd()->dst_md();
+            ref_post_ops->execute(d, args);
+        }
+        if (with_dst_scales) d *= dst_scales[0];
+        io::store_float_value(dst_d.data_type(), d, dst, dst_off);
+        utils::dim_iterator(dst_d.dims(), dst_dims_idx, batch_ndims);
+    });
 
     return status::success;
 }

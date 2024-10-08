@@ -24,17 +24,27 @@ if(DPCPP_HOST_COMPILER_KIND STREQUAL "DEFAULT")
     return()
 endif()
 
-if(NOT DPCPP_HOST_COMPILER_KIND MATCHES "^(GNU|CLANG)$")
-    message(FATAL_ERROR "The DNNL_DPCPP_HOST_COMPILER value ${DNNL_DPCPP_HOST_COMPILER} is not supported")
-endif()
+if(DPCPP_HOST_COMPILER_KIND STREQUAL "GNU")
+    set(DPCPP_HOST_COMPILER_OPTS)
 
+    if(DNNL_TARGET_ARCH STREQUAL "X64")
+        if(DNNL_ARCH_OPT_FLAGS STREQUAL "HostOpts")
+            platform_gnu_x64_arch_ccxx_flags(DPCPP_HOST_COMPILER_OPTS)
+        else()
+            # Assumption is that the passed flags are compatible with GNU compiler
+            append(DPCPP_HOST_COMPILER_OPTS "${DNNL_ARCH_OPT_FLAGS}")
+        endif()
+    else()
+        message(FATAL_ERROR "The DNNL_DPCPP_HOST_COMPILER option is only supported for DNNL_TARGET_ARCH=X64")
+    endif()
 
-if(DPCPP_HOST_COMPILER_KIND MATCHES "^(GNU|CLANG)$")
-    # Common flags for GNU and CLANG IDs.
     platform_unix_and_mingw_common_ccxx_flags(DPCPP_HOST_COMPILER_OPTS)
     platform_unix_and_mingw_common_cxx_flags(DPCPP_HOST_COMPILER_OPTS)
 
     sdl_unix_common_ccxx_flags(DPCPP_HOST_COMPILER_OPTS)
+    sdl_gnu_common_ccxx_flags(DPCPP_HOST_COMPILER_OPTS)
+    sdl_gnu_src_ccxx_flags(DPCPP_SRC_CXX_FLAGS)
+    sdl_gnu_example_ccxx_flags(DPCPP_EXAMPLE_CXX_FLAGS)
 
     # SYCL uses C++17 features in headers hence C++17 support should be enabled
     # for host compiler.
@@ -55,51 +65,28 @@ if(DPCPP_HOST_COMPILER_KIND MATCHES "^(GNU|CLANG)$")
     # from sycl.hpp header. Suppress the warnings for now.
     append(DPCPP_HOST_COMPILER_OPTS "-Wno-deprecated-declarations")
 
+    # SYCL headers contain some comments that trigger warning with GNU compiler
+    append(DPCPP_HOST_COMPILER_OPTS "-Wno-comment")
+
     # Using single_task, cgh.copy, cgh.fill may cause the following warning:
-    # "warning: `clang::sycl_kernel` scoped attribute directive ignored [-Wattributes]"
+    # "warning: ‘clang::sycl_kernel’ scoped attribute directive ignored [-Wattributes]"
     # We don't have control over it so just suppress it for the time being.
     append(DPCPP_HOST_COMPILER_OPTS "-Wno-attributes")
 
-    # DPCPP_HOST_COMPILER_KIND specific flags.
-    if(DNNL_TARGET_ARCH STREQUAL "X64")
-        if(DNNL_ARCH_OPT_FLAGS STREQUAL "HostOpts")
-            if(DPCPP_HOST_COMPILER_KIND STREQUAL "GNU")
-                platform_gnu_x64_arch_ccxx_flags(DPCPP_HOST_COMPILER_OPTS)
-            elseif(DPCPP_HOST_COMPILER_KIND STREQUAL "CLANG")
-                platform_clang_x64_arch_ccxx_flags(DPCPP_HOST_COMPILER_OPTS)
-            endif()
-        else()
-            # Assumption is that the passed flags are compatible with GNU compiler
-            append(DPCPP_HOST_COMPILER_OPTS "${DNNL_ARCH_OPT_FLAGS}")
-        endif()
-    else()
-        message(FATAL_ERROR "The DNNL_DPCPP_HOST_COMPILER option is only supported for DNNL_TARGET_ARCH=X64")
-    endif()
+    # Host compiler operates on preprocessed files and headers, and it
+    # mistakenly assumes that anonymous namespace types are used from a header
+    # which is not always the case.
+    append(DPCPP_HOST_COMPILER_OPTS "-Wno-subobject-linkage")
 
-    if(DPCPP_HOST_COMPILER_KIND STREQUAL "GNU")
-        platform_gnu_nowarn_ccxx_flags(DPCPP_CXX_NOWARN_FLAGS ${DPCPP_HOST_COMPILER_MAJOR_VER}.${DPCPP_HOST_COMPILER_MINOR_VER})
-        sdl_gnu_common_ccxx_flags(DPCPP_HOST_COMPILER_OPTS DPCPP_HOST_COMPILER_VER)
-        sdl_gnu_src_ccxx_flags(DPCPP_SRC_CXX_FLAGS)
-        sdl_gnu_example_ccxx_flags(DPCPP_EXAMPLE_CXX_FLAGS)
+    platform_gnu_nowarn_ccxx_flags(DPCPP_CXX_NOWARN_FLAGS ${DPCPP_HOST_COMPILER_MAJOR_VER}.${DPCPP_HOST_COMPILER_MINOR_VER})
 
-        # SYCL headers contain some comments that trigger warning with GNU compiler
-        append(DPCPP_HOST_COMPILER_OPTS "-Wno-comment")
-
-        # Host compiler operates on preprocessed files and headers, and it
-        # mistakenly assumes that anonymous namespace types are used from a header
-        # which is not always the case.
-        append(DPCPP_HOST_COMPILER_OPTS "-Wno-subobject-linkage")
-    elseif(DPCPP_HOST_COMPILER_KIND STREQUAL "CLANG")
-        platform_clang_nowarn_ccxx_flags(DPCPP_CXX_NOWARN_FLAGS)
-    endif()
+    append(CMAKE_CXX_FLAGS "-fsycl-host-compiler=${DPCPP_HOST_COMPILER}")
+    append_host_compiler_options(CMAKE_CXX_FLAGS "${DPCPP_HOST_COMPILER_OPTS}")
 
     # When using a non-default host compiler the main compiler doesn't
     # handle some arguments properly and issues the warning.
     # Suppress the warning until the bug is fixed.
-    #
-    # Affects both, GNU and CLANG kinds.
     append(CMAKE_CXX_FLAGS "-Wno-unused-command-line-argument")
-
-    append(CMAKE_CXX_FLAGS "-fsycl-host-compiler=${DPCPP_HOST_COMPILER}")
-    append_host_compiler_options(CMAKE_CXX_FLAGS "${DPCPP_HOST_COMPILER_OPTS}")
+elseif(NOT DNNL_DPCPP_HOST_COMPILER STREQUAL "DEFAULT")
+    message(FATAL_ERROR "The valid values for DNNL_DPCPP_HOST_COMPILER: DEFAULT or an executable of the GNU C++ compiler or an absolute path to it")
 endif()

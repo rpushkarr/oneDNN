@@ -171,7 +171,8 @@ struct jit_uni_softmax_fwd_t : public primitive_t {
 
     private:
         void init_scratchpad() {
-            if (dst_md()->data_type != data_type::f32) {
+            if (utils::one_of(
+                        dst_md()->data_type, data_type::u8, data_type::s8)) {
                 auto scratchpad = scratchpad_registry().registrar();
                 // When stride != 1, then each thread operates over simd at a
                 // time, thus, increased scratchpad size.

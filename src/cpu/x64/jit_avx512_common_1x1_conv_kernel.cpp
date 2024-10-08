@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2024 Intel Corporation
+* Copyright 2017-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -552,8 +552,7 @@ void jit_avx512_common_1x1_conv_kernel::generate() {
 
     postamble();
 
-    if (jcp.with_eltwise)
-        postops_injector_->prepare_table(/* generate = */ true);
+    if (jcp.with_eltwise) postops_injector_->prepare_table();
 }
 
 status_t jit_avx512_common_1x1_conv_kernel::init_conf(jit_1x1_conv_conf_t &jcp,

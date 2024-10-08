@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2024 Intel Corporation
+* Copyright 2021-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -53,19 +53,15 @@ public:
 
         // for each pattern. match it
         std::vector<op_t *> matched_op_list;
-        if (get_verbose(verbose_t::create_dispatch, component_t::graph)) {
-            verbose_printf(
-                    "graph,create:dispatch,pattern_matcher,%s,fake_backend\n",
-                    get_pass_name().c_str());
-        }
         pu.match(agraph, pgraph, matched_op_list);
         if (!matched_op_list.empty()) {
             // temporary solution here for showing which pattern matched
             if (getenv_int_user("GRAPH_DUMP", 0) > 0
                     || utils::check_verbose_string_user(
                             "GRAPH_DUMP", "pattern")) {
-                verbose_printf(
-                        "graph,info,pattern,hit,%s\n", get_pass_name().c_str());
+                printf("onednn_graph_verbose,info,pattern,hit,%s\n",
+                        get_pass_name().c_str());
+                fflush(stdout);
             }
 
             // Only fuse not rewrite. Will remove the fuse once dnnl

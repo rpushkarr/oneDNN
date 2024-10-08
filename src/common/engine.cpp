@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2024 Intel Corporation
+* Copyright 2016-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -30,11 +30,11 @@
 #endif
 
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
-#include "xpu/ocl/engine_factory.hpp"
+#include "gpu/ocl/ocl_engine.hpp"
 #endif
 
 #ifdef DNNL_WITH_SYCL
-#include "xpu/sycl/engine_factory.hpp"
+#include "sycl/sycl_engine.hpp"
 #endif
 
 namespace dnnl {
@@ -53,12 +53,12 @@ static inline std::unique_ptr<engine_factory_t> get_engine_factory(
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
     if (kind == engine_kind::gpu && runtime_kind == runtime_kind::ocl) {
         return std::unique_ptr<engine_factory_t>(
-                new xpu::ocl::engine_factory_t(kind));
+                new gpu::ocl::ocl_engine_factory_t(kind));
     }
 #endif
 #ifdef DNNL_WITH_SYCL
     if (runtime_kind == runtime_kind::sycl)
-        return xpu::sycl::get_engine_factory(kind);
+        return sycl::get_engine_factory(kind);
 #endif
     return nullptr;
 }
@@ -82,25 +82,19 @@ size_t dnnl_engine_get_count(engine_kind_t kind) {
 status_t dnnl_engine_create(
         engine_t **engine, engine_kind_t kind, size_t index) {
     using namespace dnnl::impl;
-    VERROR_ENGINE(engine != nullptr, invalid_arguments, VERBOSE_NULL_ARG);
+    if (engine == nullptr) return invalid_arguments;
 
     // engine_factory creation can fail with an exception
     try {
         auto ef = get_engine_factory(kind, get_default_runtime(kind));
-        VERROR_ENGINE(ef != nullptr, invalid_arguments,
-                VERBOSE_INVALID_ENGINE_KIND, dnnl_engine_kind2str(kind));
-        VERROR_ENGINE(index < ef->count(), invalid_arguments,
-                VERBOSE_INVALID_ENGINE_IDX, ef->count(),
+        VCONDCHECK(common, create, check, engine, ef != nullptr,
+                invalid_arguments, VERBOSE_INVALID_ENGINE_KIND,
+                dnnl_engine_kind2str(kind));
+        VCONDCHECK(common, create, check, engine, index < ef->count(),
+                invalid_arguments, VERBOSE_INVALID_ENGINE_IDX, ef->count(),
                 dnnl_engine_kind2str(kind), index);
 
-        const status_t engine_status = ef->engine_create(engine, index);
-
-        if (engine_status != success) {
-            VERROR(common, runtime, VERBOSE_ENGINE_CREATION_FAIL,
-                    dnnl_engine_kind2str(kind), index);
-        }
-
-        return engine_status;
+        return ef->engine_create(engine, index);
     } catch (...) {
         VERROR(common, runtime, VERBOSE_INVALID_DEVICE_ENV,
                 dnnl_engine_kind2str(kind), index);

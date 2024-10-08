@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2024 Intel Corporation
+ * Copyright 2021-2023 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -307,8 +307,7 @@ std::pair<bool, std::pair<size_t, int64_t>> shuffle_fusible(
 // performance. So, we check the shape in this function and only make
 // per_tensor, per_channel, per_mb_w(MatMul) and full tensor broadcast
 // binary able to be fused.
-bool post_binary_fusible(const op_t *base_op, const op_t *bin_op,
-        engine_kind_t ekind = engine_kind::cpu);
+bool post_binary_fusible(const op_t *base_op, const op_t *bin_op);
 
 // oneDNN support post depthwise conv fusion. This function is used to check if
 // two conv ops can be fused as a conv + depthwise pattern.
@@ -329,13 +328,13 @@ std::string kind2str(op_kind_t kind);
 bool is_typecast(const op_t *op);
 
 bool with_runtime_scales(const std::shared_ptr<op_t> &op,
-        const fusion_info_mgr_t &mgr, bool is_input, size_t index);
+        const fusion_info_mgr_t &mgr, bool is_input, size_t indice);
 
 bool with_runtime_dst_scales(
         const std::shared_ptr<op_t> &op, const fusion_info_mgr_t &mgr);
 
 bool with_runtime_zps(const std::shared_ptr<op_t> &op,
-        const fusion_info_mgr_t &mgr, bool is_input, size_t index);
+        const fusion_info_mgr_t &mgr, bool is_input, size_t indice);
 
 // This function is used to check if a dnnl_reorder op is converted from or act
 // as a Reorder op. This function will only return true for a dnnl_reorder op

@@ -17,6 +17,8 @@
 #ifndef UTILS_DATA_KIND_HPP
 #define UTILS_DATA_KIND_HPP
 
+#define BENCHDNN_DNNL_ARG_UNDEF 0
+
 enum data_kind_t {
     SRC = 0,
     WEI,
@@ -39,7 +41,6 @@ enum data_kind_t {
     WEI_ITER,
     WEI_PEEPHOLE,
     WEI_PROJECTION,
-    DROPOUT_MASK,
 
     DAT_TOTAL,
 };

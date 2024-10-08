@@ -41,7 +41,6 @@ FILE(GLOB DNNL_COMMON_TEST_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/test_scratchpad.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_subgraph_pass.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_thread_local_cache.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_select.cpp
 )
 
 # op compile/execution need test on both CPU and GPU
@@ -55,12 +54,10 @@ FILE(GLOB DNNL_OP_EXECUTION_TEST_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/test_convtranspose.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_dequantize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_eltwise.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_group_norm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_interpolate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_large_partition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_layer_norm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_matmul.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_mqa_decomp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_prelu.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_quantize.cpp

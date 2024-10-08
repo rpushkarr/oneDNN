@@ -84,8 +84,10 @@ struct prb_t : public desc_t {
     // A ctor with common interface across all drivers.
     prb_t(const settings_t &s)
         : prb_t(s.desc, s.mb[0], s.dir[0], s.dt[0], s.tag[0], s.flags[0],
-                s.inplace[0], s.attributes.front(), s.ctx_init[0], s.ctx_exe[0],
-                s.check_alg) {
+                s.inplace[0],
+                settings_t::get_attr(s.scales[0], s.zero_points[0],
+                        s.post_ops[0], s.scratchpad_mode[0], s.fpmath_mode[0]),
+                s.ctx_init[0], s.ctx_exe[0], s.check_alg) {
         SAFE_V(s.has_single_setup() ? OK : FAIL);
     }
 
@@ -172,11 +174,8 @@ struct cfg_t {
     // ALG_2: same as ALG_1 for mean and some more variation in src.
     // ALG_AUTO: choose between algorithms automatically.
     //
-    // `density_` for ALG_0 is filled according to the following inequation:
+    // `density_` is filled according to the following inequation:
     //     (exact_bits - log_2(L * density)) / 2 >= flex_bits
-    // For ALG_2 use ~100k non-zero elements. With more elements, rounding issues
-    // are popping up for large spatial due to very long accumulation chains
-    // and potential different order of accumulation.
     cfg_t(const prb_t *prb)
         : exact_bits_(digits_dt(prb->dt[0]))
         , L_(prb->ic / prb->g * prb->id * prb->ih * prb->iw)
@@ -196,15 +195,13 @@ struct cfg_t {
         , flex_mask_((1LL << flex_bits_) - 1)
         , density_(check_alg_ == bnorm::ALG_0
                           ? 1.f * (1LL << (exact_bits_ - 2 * flex_bits_)) / L_
-                          : check_alg_ == bnorm::ALG_2
-                          ? MIN2(100000.f / L_, 1.f)
                           : 1.f) {
         assert(logL_ <= 0 || (1LL << (logL_ - 1)) < L_);
         assert(L_ <= (1LL << logL_));
         assert(flex_bits_ >= min_flex_bits_);
         BENCHDNN_PRINT(6,
-                "[CFG]: check_alg:%s; L:%zu; density:%g; flex_bits:" IFMT "\n",
-                check_alg2str(check_alg_), (size_t)L_, density_, flex_bits_);
+                "[CFG]: check_alg:%s; density:%g; flex_bits:" IFMT "\n",
+                check_alg2str(check_alg_), density_, flex_bits_);
     }
 
     int64_t exact_bits_;
@@ -268,7 +265,7 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
         const args_t &ref_args);
 std::vector<int> supported_exec_args(dir_t dir);
 int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
-        dnnl_primitive_t prim, const prb_t *prb, res_t *res,
+        dnnl_primitive_t prim, const prb_t *prb, res_t *res, dir_t dir,
         dnnl_primitive_t prim_ref = nullptr);
 
 void skip_unimplemented_prb(const prb_t *prb, res_t *res);

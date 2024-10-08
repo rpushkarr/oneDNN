@@ -79,89 +79,54 @@ int fill_src(const prb_t *prb, const cfg_t &cfg, dnn_mem_t &mem_fp,
         // seeding with 0.
         std::minstd_rand b_seed(idx + 1);
         b_seed.discard(2);
-        std::bernoulli_distribution b_dist_big_val(0.5f);
-        std::bernoulli_distribution b_dist_nonzero_val(cfg.density_);
-
-        float m_check = 0.f; // To verify that filled data mean will match.
-        bool bigger_val = false; // Out of all loops.
-        bool is_nonzero = true; // Out of all loops, too.
+        std::bernoulli_distribution b_dist(0.5f);
 
         for (int64_t c = prb->get_c_start(g); c < prb->get_c_start(g + 1);
                 ++c) {
-            // The filling logic must start from scratch for odd n_channels.
-            // This var helps to make `index_order` even.
-            const int64_t odd_start
-                    = g % 2 && prb->get_c_start(1) % 2 && spatial % 2;
+            // l[0] must be even
+            int64_t l_base = spatial * (idx * prb->ic / prb->g + c * 239 * 2);
             int64_t off = data_off(prb, mb, c, 0, 0, 0);
+            bool bigger_val = false; // Out of spatial loop.
 
             for_(int64_t d = 0; d < prb->id; ++d)
             for_(int64_t h = 0; h < prb->ih; ++h)
             for (int64_t w = 0; w < prb->iw; ++w) {
                 const int64_t sp = d * prb->ih * prb->iw + h * prb->iw + w;
-                // If spatial and channels are odd, the algorithm must adjust
-                // values accordingly by specifying pairs of elements and a tail
-                // element.
-                const int64_t index_order = c * spatial + sp + odd_start;
                 float val = 0.f;
                 if (cfg.check_alg_ == ALG_2) {
-                    const bool is_even = index_order % 2 == 0;
+                    const bool is_even = sp % 2 == 0;
                     const float sign = is_even ? 1.f : -1.f;
                     // Update the value for even cases.
-                    bigger_val = is_even ? b_dist_big_val(b_seed) : bigger_val;
-                    // Sparsifying a tensor if cfg instructed to do so.
-                    if (cfg.density_ < 1.f) {
-                        is_nonzero = is_even ? b_dist_nonzero_val(b_seed)
-                                             : is_nonzero;
-                    }
-                    const float val_shift = sign * is_nonzero * val_coeff;
+                    bigger_val = is_even ? b_dist(b_seed) : bigger_val;
+                    const float val_shift = sign * val_coeff;
                     // Shift left and right from mean val, shift bigger with
                     // probability.
                     val = m + val_shift + 3.f * bigger_val * val_shift;
-                    if (cfg.L_ % 2
-                            && (c * spatial + sp == cfg.L_ * (g + 1) - 1)) {
-                        // Due to groups, the condition above involves them to
-                        // set the tail value for each group of channels.
-                        val = m;
-                    }
                 } else {
+                    const int64_t l = l_base + sp;
+
                     // Shortcut for zero values.
                     if (cfg.check_alg_ == ALG_0
-                            && !flip_coin(
-                                    index_order / 2 * 257ULL, cfg.density_)) {
+                            && !flip_coin(l / 2 * 257ULL, cfg.density_)) {
                         mem_fp.set_elem(off + sp, 0);
                         continue;
                     }
 
-                    const int64_t gen
-                            = (index_order / 2 * 1637) & cfg.flex_mask_;
+                    const int64_t gen = (l / 2 * 1637) & cfg.flex_mask_;
                     // s_{i} + s_{i+1} = 2 * m
-                    const float sign = index_order % 2 == 0 ? 1.f : -1.f;
+                    const float sign = l % 2 == 0 ? 1.f : -1.f;
                     const float f = sign * gen / (1 << cfg.flex_bits_);
 
                     val = cfg.check_alg_ == ALG_0 ? f : m * (1.f + f);
                     if (prb->flags & GLOB_STATS) {
-                        val = (index_order % 65) - 32;
-                    } else if (cfg.L_ % 2
-                            && (c * spatial + sp == cfg.L_ * (g + 1) - 1)) {
-                        // Due to groups, the condition above involves them to
-                        // set the tail value for each group of channels.
+                        val = (l % 65) - 32;
+                    } else if (cfg.L_ % 2 && (c * spatial + sp == cfg.L_ - 1)) {
                         val = m;
                     }
                 }
-                auto round_val
-                        = round_to_nearest_representable(prb->dt[0], val);
-                mem_fp.set_elem(off + sp, round_val);
-                m_check += round_val;
+                mem_fp.set_elem(off + sp,
+                        round_to_nearest_representable(prb->dt[0], val));
             }
-        }
-        m_check /= prb->get_c_start(1) * spatial;
-        if (!(prb->flags & GLOB_STATS) && m_check != m) {
-            BENCHDNN_PRINT(0,
-                    "Error: Mean of MB(%ld):G(%ld) for filled src values "
-                    "doesn't match the one filled ahead: `%g` (exp) versus "
-                    "`%g` (got).\n",
-                    (long)mb, (long)g, m, m_check);
-            SAFE_V(FAIL);
         }
     });
 
@@ -426,10 +391,9 @@ int prepare_bwd(const prb_t *prb, dnn_mem_map_t &mem_map,
 dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
     const prb_t *prb = init_pd_args.prb;
     res_t *res = init_pd_args.res;
-    bool force_f32_dt = init_pd_args.force_f32_dt;
 
-    auto src_d = dnn_mem_t::init_md(prb->ndims, prb->data_dims().data(),
-            force_f32_dt ? dnnl_f32 : prb->dt[0], prb->tag[0]);
+    auto src_d = dnn_mem_t::init_md(
+            prb->ndims, prb->data_dims().data(), prb->dt[0], prb->tag[0]);
 
     attr_args_t attr_args;
     attr_args.prepare_post_ops_mds(
@@ -439,8 +403,8 @@ dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
 
     auto flags = (dnnl_normalization_flags_t)prb->flags;
     if (prb->dir & FLAG_FWD) {
-        auto dst_d = dnn_mem_t::init_md(prb->ndims, prb->data_dims().data(),
-                force_f32_dt ? dnnl_f32 : prb->dt[1], prb->tag[1]);
+        auto dst_d = dnn_mem_t::init_md(
+                prb->ndims, prb->data_dims().data(), prb->dt[1], prb->tag[1]);
         auto prop = prb->dir & FLAG_INF ? dnnl_forward_inference
                                         : dnnl_forward_training;
         TIME_C_PD(DNN_SAFE_STATUS(
@@ -449,12 +413,10 @@ dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
                         init_pd_args.src_md ? init_pd_args.src_md : src_d,
                         dst_d, prb->g, prb->eps, flags, dnnl_attr)));
     } else {
-        auto diff_src_d
-                = dnn_mem_t::init_md(prb->ndims, prb->data_dims().data(),
-                        force_f32_dt ? dnnl_f32 : prb->dt[0], prb->tag[0]);
-        auto diff_dst_d
-                = dnn_mem_t::init_md(prb->ndims, prb->data_dims().data(),
-                        force_f32_dt ? dnnl_f32 : prb->dt[1], prb->tag[1]);
+        auto diff_src_d = dnn_mem_t::init_md(
+                prb->ndims, prb->data_dims().data(), prb->dt[0], prb->tag[0]);
+        auto diff_dst_d = dnn_mem_t::init_md(
+                prb->ndims, prb->data_dims().data(), prb->dt[1], prb->tag[1]);
         auto prop = prb->dir & FLAG_WEI ? dnnl_backward : dnnl_backward_data;
         TIME_C_PD(DNN_SAFE_STATUS(
                 dnnl_group_normalization_backward_primitive_desc_create(
@@ -494,14 +456,8 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
         trh = trh_coeff * 5e-6;
     cmp.set_threshold(trh);
 
-    // Obtain number of non-zero elements for forward case from config.
-    if (kind == DST) {
-        cfg_t cfg(prb);
-        // u8 turns half of output into zeros.
-        const int neg_to_zero_coeff = 1 + (prb->dt[1] == dnnl_u8);
-        float n_zeros = 1.f - (cfg.density_ / neg_to_zero_coeff);
-        cmp.set_zero_trust_percent(MAX2(30.f, 100.f * n_zeros));
-    }
+    // u8 turns half of output into zeros.
+    if (prb->dt[1] == dnnl_u8) cmp.set_zero_trust_percent(60.f);
 
     // When the error is larger than `trh`, it could be due to a catastrophic
     // cancellation in final result which is computed as `Y = a * X + b`.
@@ -520,8 +476,8 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
 
                 const auto &sh = ref_args.find(DNNL_ARG_SHIFT);
                 const auto &dst = ref_args.find(DNNL_ARG_DST);
-                const int64_t c
-                        = dst.get_idx(args.idx, 1 << 1 /* last_dim_mask */);
+                const int64_t c = dst.get_scale_idx(
+                        args.idx, 1 << 1 /* last_dim_mask */);
                 const float beta = sh.get_elem(c);
                 // Using an empirically derived threshold, check if
                 // cancellation error in `|Y| = |a*X - (-b)|` is huge.
@@ -583,15 +539,15 @@ fill_cfg_t binary_po_fill_cfg(
 }
 
 int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
-        dnnl_primitive_t prim, const prb_t *prb, res_t *res,
+        dnnl_primitive_t prim, const prb_t *prb, res_t *res, dir_t dir,
         dnnl_primitive_t prim_ref) {
+    update_inplace_memory_args(mem_map, prb, dir);
     if (has_bench_mode_modifier(mode_modifier_t::no_host_memory)) return OK;
 
     // TODO: this function still allocates the full memory print needed to fill
     // the data and each argument can't be destroyed right away since filling
     // requires all of them at a time.
     const auto &ref_engine = get_cpu_engine();
-    const bool is_fwd_prim = is_fwd_prop_kind(query_prop_kind(query_pd(prim)));
 
     for (auto &entry : mem_map) {
         const int exec_arg = entry.first;
@@ -633,7 +589,7 @@ int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
         }
     }
 
-    if (is_fwd_prim) {
+    if (dir & FLAG_FWD) {
         SAFE(prepare_fwd(prb, mem_map, ref_mem_map, res), WARN);
     } else {
         SAFE(prepare_bwd(prb, mem_map, ref_mem_map, res), WARN);
@@ -684,8 +640,9 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     dnn_mem_map_t mem_map, ref_mem_map;
     init_memory_args<prb_t>(mem_map, prb, prim, supported_exec_args(prb->dir));
-    TIME_FILL(SAFE(
-            init_ref_memory_args(ref_mem_map, mem_map, prim, prb, res), WARN));
+    TIME_FILL(SAFE(init_ref_memory_args(
+                           ref_mem_map, mem_map, prim, prb, res, prb->dir),
+            WARN));
 
     args_t args(mem_map), ref_args(ref_mem_map);
 
@@ -693,8 +650,7 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     check_correctness(
             prb, get_kinds_to_check(prb), args, ref_args, setup_cmp, res);
-    SAFE(check_bitwise(prim, get_kinds_to_check(prb), args, prb->attr,
-                 prb->inplace, res),
+    SAFE(check_bitwise(prim, get_kinds_to_check(prb), args, prb->inplace, res),
             WARN);
 
     return measure_perf(prb->ctx_exe, res, prim, args);

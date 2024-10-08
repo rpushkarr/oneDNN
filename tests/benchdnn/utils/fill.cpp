@@ -27,38 +27,20 @@ fill_cfg_t::fill_cfg_t(dnnl_data_type_t dt, float range_min_val,
         float range_max_val, bool only_integer, attr_t::post_ops_t::kind_t alg,
         const std::string &name)
     : dt_(dt)
-    , range_min_val_(MAX2(lowest_dt(dt_), range_min_val))
-    , range_max_val_(MIN2(max_dt(dt_), range_max_val))
-    , only_integer_(is_integral_dt(dt_) || only_integer)
+    , range_min_val_(dt_ == dnnl_u8 ? MAX2(0.f, range_min_val) : range_min_val)
+    , range_max_val_(range_max_val)
+    , only_integer_(is_integral_dt(dt_) ? true : only_integer)
     , name_(name) {
+    // Apply range inversion if `alg` is `sub`. This helps to keep output
+    // data positive if it was intended to be positive. In rest cases act
+    // like for binary `add` algorithm. If `attr` is unavailable in the
+    // code, use `attr_t::post_ops_t::kind_t::ADD` as a defulat value.
     if (alg == attr_t::post_ops_t::kind_t::SUB) {
-        // Apply range inversion if `alg` is `sub`. This helps to keep output
-        // data positive if it was intended to be positive. In rest cases act
-        // like for binary `add` algorithm. If `attr` is unavailable in the
-        // code, use `attr_t::post_ops_t::kind_t::ADD` as a defulat value.
         float sub_range_min_val_ = -range_min_val_;
         float sub_range_max_val_ = -range_max_val_;
         range_min_val_ = MIN2(sub_range_min_val_, sub_range_max_val_);
         range_max_val_ = MAX2(sub_range_min_val_, sub_range_max_val_);
-    } else if (alg == attr_t::post_ops_t::kind_t::MUL) {
-        // Reduce the range for multiplication to decrease a computational
-        // error magnitute which can lead to rounding to a different output
-        // value for low-precision data types.
-        // TODO: replace with using specific values instead.
-        range_min_val_ /= 8.f;
-        range_max_val_ /= 8.f;
     }
-}
-
-fill_cfg_t::fill_cfg_t(
-        const std::vector<float> &user_set, const std::string &name)
-    : dt_(dnnl_data_type_undef)
-    , range_min_val_(-FLT_MAX)
-    , range_max_val_(FLT_MAX)
-    , predefined_set_(user_set)
-    , only_integer_(false)
-    , name_(name) {
-    assert(!predefined_set_.empty());
 }
 
 std::string fill_cfg_t::print_verbose() const {
@@ -66,19 +48,9 @@ std::string fill_cfg_t::print_verbose() const {
 
     ss << "[FILL_CFG]";
     if (!name_.empty()) ss << " name:" << name_;
-
-    // Predefined set is mutually excluded with a range setting.
-    if (!predefined_set_.empty()) {
-        ss << " set:[";
-        for (const auto &e : predefined_set_) {
-            ss << e << ";";
-        }
-        ss << "]";
-    } else {
-        ss << " dt:" << dt_;
-        ss << " range:[" << range_min_val_ << ";" << range_max_val_ << "]";
-        if (only_integer_) ss << " only_integer:true";
-    }
+    ss << " dt:" << dt_;
+    ss << " range:[" << range_min_val_ << ";" << range_max_val_ << "]";
+    if (only_integer_) ss << " only_integer:true";
 
     return ss.str();
 }
@@ -152,7 +124,6 @@ int fill_zero_points(
         /* Do fixed partitioning to have same filling for any number of threads */
         static constexpr int64_t chunk_size = 64;
         const int64_t n_chunks = div_up(nelems, chunk_size);
-        const int min_val = MAX2(-2, static_cast<int>(lowest_dt(mem_dt.dt())));
         benchdnn_parallel_nd(n_chunks, [&](int64_t idx_chunk) {
             int64_t idx_start = idx_chunk * chunk_size;
             int64_t idx_end = MIN2(idx_start + chunk_size, nelems);
@@ -163,7 +134,8 @@ int fill_zero_points(
             std::minstd_rand int_seed(idx_start + 1);
             int_seed.discard(1);
 
-            std::uniform_int_distribution<> gen(min_val, 2);
+            std::uniform_int_distribution<> gen(
+                    mem_dt.dt() == dnnl_u8 ? 0 : -2, 2);
 
             for (int64_t idx = idx_start; idx < idx_end; ++idx) {
                 const float zp_val = gen(int_seed);
@@ -182,9 +154,6 @@ int fill_random_real_dense(dnn_mem_t &mem, dnn_mem_t &mem_ref, res_t *res,
     if (nelems == 0) return OK;
 
     BENCHDNN_PRINT(6, "%s\n", fill_cfg.print_verbose().c_str());
-
-    // This function doesn't handle the predefined set yet.
-    assert(fill_cfg.predefined_set_.empty());
 
 #ifdef DNNL_EXPERIMENTAL_SPARSE
     // The `nelems()` function returns a product of dims/pdims regardless of

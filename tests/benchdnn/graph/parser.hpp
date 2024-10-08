@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2024 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -20,12 +20,6 @@
 #include <map>
 #include <string>
 
-#include "allocator.hpp"
-#include "dnnl_common.hpp"
-#include "oneapi/dnnl/dnnl_graph.hpp"
-
-extern dnnl_engine_kind_t engine_tgt_kind;
-
 namespace graph {
 
 bool parse_input_shapes(
@@ -34,12 +28,6 @@ bool parse_input_shapes(
 
 bool parse_op_attrs(std::vector<std::map<size_t, std::string>> &op_attrs_vec,
         const char *str);
-
-bool parse_graph_expected_n_partitions(
-        std::vector<size_t> &expected_n_partition_vec, const char *str);
-
-bool parse_graph_fpmath_mode(
-        std::vector<std::string> &fpmath_mode_vec, const char *str);
 
 bool parse_input_file(std::string &json_file, const char *str);
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2021-2024 Intel Corporation
+ * Copyright 2021-2023 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@ namespace graph {
 namespace dnnl_impl {
 using op_t = op_t;
 using op_ptr = std::shared_ptr<op_t>;
+using value_ptr = std::shared_ptr<value_t>;
 using ltw = logical_tensor_wrapper_t;
 
 bool need_prop_once_more(const std::shared_ptr<subgraph_t> &sg) {
@@ -105,11 +106,6 @@ status_t layout_propagation(std::shared_ptr<subgraph_t> &sg) {
 
     status_t ret;
     std::unordered_set<op_t *> visited;
-    int propagation_number = 0;
-    // This LAYOUT_PROPAGATION_NUMBER is used to limit layout propagation number
-    // of cycles.The maximum value doesn't exceed the number of inserted reorder
-    // ops.
-#define LAYOUT_PROPAGATION_NUMBER 10
     do {
         subgraph_rewriter_t rewriter(sg);
         ret = topo_order_visit(sg->get_output_ops(), [&](op_t *op) {
@@ -138,13 +134,8 @@ status_t layout_propagation(std::shared_ptr<subgraph_t> &sg) {
         });
 
         if (ret != status::success) return ret;
+
         rewriter.run();
-        propagation_number++;
-        if (propagation_number >= LAYOUT_PROPAGATION_NUMBER) {
-            assertm(false,
-                    "expect layout propagation number to be less than 10");
-            return status::invalid_arguments;
-        }
     } while (need_prop_once_more(sg));
 
     // Add check for the layout type of partition outputs to make partition

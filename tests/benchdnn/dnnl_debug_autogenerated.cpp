@@ -45,10 +45,6 @@ dnnl_data_type_t str2dt(const char *str) {
     CASE(boolean);
     CASE(f8_e5m2);
     CASE(f8_e4m3);
-    CASE(s4);
-    CASE(u4);
-    CASE(e8m0);
-    CASE(f4_e2m1);
     CASE(data_type_max);
 #undef CASE
     if (!strcmp("undef", str) || !strcmp("dnnl_data_type_undef", str))
@@ -66,7 +62,6 @@ dnnl_sparse_encoding_t str2sparse_encoding(const char *str) {
         return CONCAT2(dnnl_, _case); \
 } while (0)
     CASE(csr);
-    CASE(coo);
     CASE(packed);
 #undef CASE
     if (!strcmp("undef", str) || !strcmp("dnnl_sparse_encoding_undef", str))
@@ -904,22 +899,8 @@ dnnl_format_tag_t str2fmt_tag(const char *str) {
     CASE(AcdeB4b8a4b);
     CASE(Ab4a);
     CASE(Ab8a);
-    CASE(Ab32a);
     CASE(BA4b4a);
     CASE(BA8b4a);
-    CASE(BA2a24b);
-    CASE(aCB2b24c);
-    CASE(BA2a8b);
-    CASE(aCB2b8c);
-    CASE(BA8a24b);
-    CASE(aCB8b24c);
-    CASE(BA8a16b);
-    CASE(aCB8b16c);
-    CASE(BA8a8b);
-    CASE(aCB8b8c);
-    CASE(bcad);
-    CASE(cabd);
-    CASE(dabc);
     CASE(x);
     CASE(nc);
     CASE(cn);
@@ -1730,8 +1711,4 @@ const char *fpmath_mode2str(dnnl_fpmath_mode_t mode) {
 
 const char *accumulation_mode2str(dnnl_accumulation_mode_t mode) {
     return dnnl_accumulation_mode2str(mode);
-}
-
-const char *rounding_mode2str(dnnl_rounding_mode_t mode) {
-    return dnnl_rounding_mode2str(mode);
 }

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2024 Intel Corporation
+* Copyright 2019-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -270,7 +270,7 @@ jit_pp_kernel_t<isa>::jit_pp_kernel_t(size_t OC, size_t MB, dim_t dst_mb_stride,
         const memory_desc_t *dst_md, bool skip_sum)
     : pp_kernel_t(
             OC, MB, dst_mb_stride, attr, bias_dt, acc_dt, dst_md, skip_sum)
-    , jit_generator(jit_name(), isa) {
+    , jit_generator(jit_name()) {
     assert(IMPLICATION(this->dst_data_type_ == bf16, mayiuse(avx512_core)));
 
     if (this->do_scale_) vreg_scale = Vmm(idx_compute_vreg_start_++);
@@ -550,7 +550,8 @@ void jit_pp_kernel_t<isa>::cvt_and_store(const Xbyak::Zmm v,
     const data_type_t dt = get_data_type(arg_num);
     if (!utils::one_of(dt, f32, bf16)) {
         Vmm vreg = Vmm(v.getIdx()); // in case of use Ymm for bf16
-        saturate_cvt_f32(vreg, vreg_zero, vreg_saturation_ubound, dt);
+        saturate_f32(vreg, vreg_zero, vreg_saturation_ubound, dt);
+        vcvtps2dq(v, v);
     } else if (dt == bf16) {
         if (isa == avx512_core_bf16)
             vcvtneps2bf16(Ymm(v.getIdx()), v);
@@ -585,7 +586,8 @@ void jit_pp_kernel_t<isa>::cvt_and_store(const Xbyak::Ymm v,
         cvt_and_store(Xbyak::Zmm(v.getIdx()), arg_num, off, tail);
         return;
     } else if (utils::one_of(dt, s8, u8, s32)) {
-        saturate_cvt_f32(v, vreg_zero, vreg_saturation_ubound, dt);
+        saturate_f32(v, vreg_zero, vreg_saturation_ubound, dt);
+        vcvtps2dq(v, v);
 
         if (dt != s32) {
             // v = { 8x32 }
@@ -629,7 +631,8 @@ void jit_pp_kernel_t<isa>::cvt_and_store(const Xbyak::Xmm v,
     const data_type_t dt = get_data_type(arg_num);
     const Xbyak::Address dst = get_address(arg_num, off);
     if (utils::one_of(dt, s8, u8, s32)) {
-        saturate_cvt_f32(v, vreg_zero, vreg_saturation_ubound, dt);
+        saturate_f32(v, vreg_zero, vreg_saturation_ubound, dt);
+        uni_vcvtps2dq(v, v);
 
         if (dt != s32) {
             // v = { 8x32 }
@@ -701,7 +704,8 @@ void jit_pp_kernel_t<isa>::runtime_tail_cvt_store(
     const Xbyak::Reg64 reg_addr = get_reg_address(arg_num);
 
     if (utils::one_of(dt, u8, s8, s32)) {
-        saturate_cvt_f32(v, vreg_zero, vreg_saturation_ubound, dt);
+        saturate_f32(v, vreg_zero, vreg_saturation_ubound, dt);
+        uni_vcvtps2dq(v, v);
     }
 
     auto runtime_tail_store = [&](int store_size) {
@@ -1192,8 +1196,7 @@ void jit_pp_kernel_t<isa>::generate() {
     if (this->do_binary_ || this->do_prelu_) add(rsp, stack_space_needed_);
     postamble();
 
-    if (this->do_eltwise_)
-        postops_injector_->prepare_table(/* generate = */ true);
+    if (this->do_eltwise_) postops_injector_->prepare_table();
 }
 
 template <cpu_isa_t isa>

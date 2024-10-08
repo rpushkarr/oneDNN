@@ -14,7 +14,6 @@
 * limitations under the License.
 *******************************************************************************/
 
-#include <algorithm>
 #include "primitive_desc.hpp"
 #include "type_helpers.hpp"
 #include "utils.hpp"
@@ -54,7 +53,7 @@ bool key_t::operator==(const key_t &rhs) const {
         && hint_mds_.size() == rhs.hint_mds_.size()
         && pd_iterator_offset_ == rhs.pd_iterator_offset_
         && impl_nthr_ == rhs.impl_nthr_
-        && skip_idx_ == rhs.skip_idx_
+	&& skip_idx_ == rhs.skip_idx_
         && (*attr_) == (*rhs.attr_);
 
     if (!ret) return false;
@@ -69,11 +68,7 @@ bool key_t::operator==(const key_t &rhs) const {
             CASE(batch_normalization)
             CASE(binary)
             CASE(concat)
-            // Use a custom comparison function that ignores alg_kind.
-            case primitive_kind::convolution:
-                ret = compare_conv_opdesc(cast_to_desc<convolution_desc_t>(op_desc_),
-                cast_to_desc<convolution_desc_t>(rhs.op_desc_));
-            break;
+            CASE(convolution)
             CASE(deconvolution)
             CASE(eltwise)
             CASE(gemm)
@@ -88,7 +83,6 @@ bool key_t::operator==(const key_t &rhs) const {
             CASE(reorder)
             CASE(resampling)
             CASE(rnn)
-            CASE(sdpa)
             CASE(shuffle)
             CASE(softmax)
             CASE(sum)
@@ -100,8 +94,10 @@ bool key_t::operator==(const key_t &rhs) const {
 
     if (!ret) return false;
 
-    return std::equal(
-            hint_mds_.begin(), hint_mds_.end(), rhs.hint_mds_.begin());
+    for (size_t i = 0; i < hint_mds_.size(); ++i)
+        if (hint_mds_[i] != rhs.hint_mds_[i]) return false;
+
+    return true;
 }
 
 // Combine hash of each memory_desc_t data member
@@ -141,13 +137,6 @@ size_t get_md_hash(const memory_desc_t &md) {
             seed = hash_combine(seed, md.format_desc.wino_desc.oc2_block);
             seed = hash_combine(seed, md.format_desc.wino_desc.adj_scale);
             seed = hash_combine(seed, md.format_desc.wino_desc.size);
-            break;
-        case format_kind::cublaslt_blocked:
-            seed = hash_combine(seed,
-                    static_cast<size_t>(md.format_desc.cublaslt_blocked_desc
-                                                .cublaslt_format));
-            seed = hash_combine(
-                    seed, (md.format_desc.cublaslt_blocked_desc.size));
             break;
         case format_kind::rnn_packed:
             seed = hash_combine(seed,
@@ -218,13 +207,6 @@ size_t get_attr_hash(const primitive_attr_t &attr) {
     seed = hash_combine(seed, static_cast<size_t>(attr.deterministic_));
     // acc_mode
     seed = hash_combine(seed, static_cast<size_t>(attr.acc_mode_));
-    // rounding_mode
-    if (!attr.rounding_mode_.has_default_values()) {
-        for (const auto &e : attr.rounding_mode_.rounding_modes_map_) {
-            seed = hash_combine(seed, e.first);
-            seed = hash_combine(seed, static_cast<size_t>(e.second));
-        }
-    }
 
     if (!attr.output_scales_.has_default_values()) {
         // output_scales: mask
@@ -236,33 +218,17 @@ size_t get_attr_hash(const primitive_attr_t &attr) {
             seed = hash_combine(seed, p.first);
             // scales: mask
             seed = hash_combine(seed, p.second.mask_);
-            // scales: groups
-            const int ndims = p.second.ndims_;
-            seed = hash_combine(seed, ndims);
-            if (ndims > 0)
-                seed = get_array_hash(seed, p.second.group_dims_, ndims);
-            // scales: data type
-            seed = hash_combine(seed, static_cast<size_t>(p.second.data_type_));
         }
     }
     // zero_points
     for (int arg : {DNNL_ARG_SRC, DNNL_ARG_WEIGHTS, DNNL_ARG_DST})
         if (!attr.zero_points_.has_default_values(arg)) {
-            const auto &zps = attr.zero_points_;
             // zero_points: arg
             seed = hash_combine(seed, arg);
             int mask = 0;
-            zps.get(arg, &mask);
+            attr.zero_points_.get(arg, &mask);
             // zero_points: mask
             seed = hash_combine(seed, mask);
-            // zero points: groups
-            const int ndims = zps.get_groups_ndims(arg);
-            seed = hash_combine(seed, ndims);
-            if (ndims > 0)
-                seed = get_array_hash(seed, zps.get_groups(arg), ndims);
-            // zero points: data type
-            seed = hash_combine(
-                    seed, static_cast<size_t>(zps.get_data_type(arg)));
         }
     // post_ops: entry[:]
     for (int i = 0; i < attr.post_ops_.len(); i++) {
@@ -321,10 +287,6 @@ size_t get_attr_hash(const primitive_attr_t &attr) {
     }
     if (attr.gpu_attr_) {
         seed = hash_combine(seed, attr.gpu_attr_->get_hash());
-    }
-    if (!attr.dropout_.has_default_values()) {
-        seed = hash_combine(
-                seed, get_md_hash(attr.dropout_.user_dropout_desc_));
     }
     // Combined hash for attributes
     return seed;
@@ -387,18 +349,7 @@ size_t get_desc_hash(const convolution_desc_t &desc) {
     // Kinds
     seed = hash_combine(seed, static_cast<size_t>(desc.primitive_kind));
     seed = hash_combine(seed, static_cast<size_t>(desc.prop_kind));
-
-    // Ignore `alg_kind` to keep hash value consistent for any algorithm.
-    //
-    // Background: when a convolution primitive descriptor is created for
-    // the algorithm `auto` we overwrite `alg_kind` field in `op_desc` when
-    // store it in the primitive descriptor. Because of that, the `op_desc`
-    // stored in the primitive descriptor is different from the one user
-    // passed to oneDNN API. Because of the difference the requested
-    // primitive descriptor cannot be found in the cache if we hash/compare
-    // `alg_kind`.
-    //seed = hash_combine(seed, static_cast<size_t>(desc.alg_kind));
-
+    seed = hash_combine(seed, static_cast<size_t>(desc.alg_kind));
     // Memory descriptors
     seed = hash_combine(seed, get_md_hash(desc.src_desc));
     seed = hash_combine(seed, get_md_hash(desc.diff_src_desc));
@@ -415,8 +366,6 @@ size_t get_desc_hash(const convolution_desc_t &desc) {
     seed = get_array_hash(seed, desc.padding[1], DNNL_MAX_NDIMS);
     // Accumulator type
     seed = hash_combine(seed, static_cast<size_t>(desc.accum_data_type));
-    // Internal member
-    seed = hash_combine(seed, static_cast<size_t>(desc.use_inversion));
     // Combined hash for (de-)convolution desc
     return seed;
 }
@@ -737,23 +686,6 @@ size_t get_desc_hash(const zero_pad_desc_t &desc) {
     size_t seed = 0;
     // Kinds
     seed = hash_combine(seed, static_cast<size_t>(desc.primitive_kind));
-    return seed;
-}
-
-size_t get_desc_hash(const sdpa_desc_t &desc) {
-    size_t seed = 0;
-    // Kinds
-    seed = hash_combine(seed, static_cast<size_t>(desc.primitive_kind));
-    // Memory descriptors
-    seed = hash_combine(seed, get_md_hash(desc.q_desc));
-    seed = hash_combine(seed, get_md_hash(desc.k_desc));
-    seed = hash_combine(seed, get_md_hash(desc.v_desc));
-    seed = hash_combine(seed, get_md_hash(desc.dst_desc));
-    seed = hash_combine(seed, get_md_hash(desc.attn_mask_desc));
-    // Scale type
-    seed = hash_combine(seed, static_cast<size_t>(desc.scale_dt));
-    seed = hash_combine(seed, desc.invert_scale);
-    // Combined hash for sdpa desc
     return seed;
 }
 

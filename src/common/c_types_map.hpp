@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2024 Intel Corporation
+* Copyright 2016-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -146,8 +146,6 @@ const alg_kind_t softmax_log = dnnl_softmax_log;
 using data_type_t = dnnl_data_type_t;
 namespace data_type {
 const data_type_t undef = dnnl_data_type_undef;
-const data_type_t f4_e2m1 = dnnl_f4_e2m1;
-const data_type_t e8m0 = dnnl_e8m0;
 const data_type_t f8_e5m2 = dnnl_f8_e5m2;
 const data_type_t f8_e4m3 = dnnl_f8_e4m3;
 const data_type_t f16 = dnnl_f16;
@@ -157,8 +155,6 @@ const data_type_t f64 = dnnl_f64;
 const data_type_t s32 = dnnl_s32;
 const data_type_t s8 = dnnl_s8;
 const data_type_t u8 = dnnl_u8;
-const data_type_t s4 = dnnl_s4;
-const data_type_t u4 = dnnl_u4;
 const data_type_t boolean = dnnl_boolean;
 const data_type_t data_type_max = dnnl_data_type_max;
 
@@ -192,18 +188,11 @@ const scratchpad_mode_t library = dnnl_scratchpad_mode_library;
 const scratchpad_mode_t user = dnnl_scratchpad_mode_user;
 } // namespace scratchpad_mode
 
-using rounding_mode_t = dnnl_rounding_mode_t;
-namespace rounding_mode {
-const rounding_mode_t environment = dnnl_rounding_mode_environment;
-const rounding_mode_t stochastic = dnnl_rounding_mode_stochastic;
-} // namespace rounding_mode
-
 #ifdef DNNL_EXPERIMENTAL_SPARSE
 using sparse_encoding_t = dnnl_sparse_encoding_t;
 namespace sparse_encoding {
 const sparse_encoding_t undef = dnnl_sparse_encoding_undef;
 const sparse_encoding_t csr = dnnl_csr;
-const sparse_encoding_t coo = dnnl_coo;
 const sparse_encoding_t packed = dnnl_packed;
 } // namespace sparse_encoding
 #else
@@ -213,7 +202,6 @@ namespace sparse_encoding {
 const sparse_encoding_t undef = 0;
 const sparse_encoding_t csr = 1;
 const sparse_encoding_t packed = 2;
-const sparse_encoding_t coo = 3;
 } // namespace sparse_encoding
 #endif
 
@@ -233,7 +221,6 @@ const format_kind_t sparse = static_cast<format_kind_t>(4);
 const format_kind_t internal_only_start = (format_kind_t)(1 << 8);
 const format_kind_t wino = internal_only_start;
 const format_kind_t rnn_packed = (format_kind_t)(internal_only_start + 1);
-const format_kind_t cublaslt_blocked = (format_kind_t)(internal_only_start + 2);
 } // namespace format_kind
 
 #ifdef DNNL_EXPERIMENTAL_PROFILING
@@ -293,16 +280,13 @@ const format_tag_t ba = dnnl_ba;
 const format_tag_t bac = dnnl_bac;
 const format_tag_t bacd = dnnl_bacd;
 const format_tag_t bca = dnnl_bca;
-const format_tag_t bcad = dnnl_bcad;
 const format_tag_t bcda = dnnl_bcda;
 const format_tag_t bcdea = dnnl_bcdea;
 const format_tag_t bacde = dnnl_bacde;
 const format_tag_t cab = dnnl_cab;
 const format_tag_t cba = dnnl_cba;
-const format_tag_t cabd = dnnl_cabd;
 const format_tag_t cdab = dnnl_cdab;
 const format_tag_t cdba = dnnl_cdba;
-const format_tag_t dabc = dnnl_dabc;
 const format_tag_t dcab = dnnl_dcab;
 const format_tag_t cdeab = dnnl_cdeab;
 const format_tag_t cdeba = dnnl_cdeba;
@@ -373,7 +357,6 @@ const format_tag_t aCB16b64c4b = dnnl_aCB16b64c4b;
 
 const format_tag_t Ab4a = dnnl_Ab4a;
 const format_tag_t Ab8a = dnnl_Ab8a;
-const format_tag_t Ab32a = dnnl_Ab32a;
 const format_tag_t Abc16a = dnnl_Abc16a;
 const format_tag_t ABc16a16b = dnnl_ABc16a16b;
 const format_tag_t ABc4a2b = dnnl_ABc4a2b;
@@ -1054,16 +1037,6 @@ const format_tag_t ABcd8b24a2b = dnnl_ABcd8b24a2b;
 const format_tag_t AcdB8b24a2b = dnnl_AcdB8b24a2b;
 const format_tag_t ABcde8b24a2b = dnnl_ABcde8b24a2b;
 const format_tag_t AcdeB8b24a2b = dnnl_AcdeB8b24a2b;
-const format_tag_t BA2a24b = dnnl_BA2a24b;
-const format_tag_t aCB2b24c = dnnl_aCB2b24c;
-const format_tag_t BA2a8b = dnnl_BA2a8b;
-const format_tag_t aCB2b8c = dnnl_aCB2b8c;
-const format_tag_t BA8a24b = dnnl_BA8a24b;
-const format_tag_t aCB8b24c = dnnl_aCB8b24c;
-const format_tag_t BA8a16b = dnnl_BA8a16b;
-const format_tag_t aCB8b16c = dnnl_aCB8b16c;
-const format_tag_t BA8a8b = dnnl_BA8a8b;
-const format_tag_t aCB8b8c = dnnl_aCB8b8c;
 
 const format_tag_t last = dnnl_format_tag_last;
 
@@ -1954,7 +1927,6 @@ const primitive_kind_t group_normalization = dnnl_group_normalization;
 // Internal only primitive kinds.
 const primitive_kind_t internal_only_start = (primitive_kind_t)(1 << 12);
 const primitive_kind_t zero_pad = internal_only_start;
-const primitive_kind_t sdpa = (primitive_kind_t)(internal_only_start + 1);
 } // namespace primitive_kind
 
 using query_t = dnnl_query_t;

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -30,13 +30,6 @@ namespace dnnl {
 namespace impl {
 namespace graph {
 namespace pass {
-
-// The pass filter function returns true if the pass is desired under the
-// given policy. Each backend should define its own filter function.
-using pass_filter_fn
-        = std::function<bool(const pass_base_ptr &, partition_policy_t)>;
-
-bool default_pass_filter(const pass_base_ptr &pass, partition_policy_t policy);
 
 /*!
  * \brief pass_registry is a registry class that
@@ -103,12 +96,9 @@ public:
     // run all passes enabled according to passConfig
     impl::status_t run_passes(graph_t &agraph,
             const std::string &pass_config_json,
-            partition_policy_t policy = partition_policy::fusion,
-            const pass_filter_fn &filter_fn = default_pass_filter);
-
+            partition_policy_t policy = partition_policy::fusion);
     impl::status_t run_passes(graph_t &agraph, std::istream *fs,
-            partition_policy_t policy = partition_policy::fusion,
-            const pass_filter_fn &filter_fn = default_pass_filter);
+            partition_policy_t policy = partition_policy::fusion);
 };
 
 } // namespace pass

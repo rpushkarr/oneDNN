@@ -16,6 +16,3 @@
 --tag=abx
 --batch=set_all
 
-# Test CI in Nightly
---reset
---batch=test_lrn_ci

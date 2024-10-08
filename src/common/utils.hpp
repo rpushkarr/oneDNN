@@ -69,20 +69,20 @@ static_assert(sizeof(void *) == 8, "oneDNN supports 64-bit architectures only");
 
 #define CHECK(f) \
     do { \
-        dnnl::impl::status_t _status_ = f; \
-        if (_status_ != dnnl::impl::status::success) return _status_; \
+        status_t _status_ = f; \
+        if (_status_ != status::success) return _status_; \
     } while (0)
 
 #define CHECK_BOOL(f) \
     do { \
-        dnnl::impl::status_t _status_ = f; \
-        if (_status_ != dnnl::impl::status::success) return false; \
+        status_t _status_ = f; \
+        if (_status_ != status::success) return false; \
     } while (0)
 
 #define UNUSED_STATUS(f) \
     do { \
-        dnnl::impl::status_t _status_ = f; \
-        assert(_status_ == dnnl::impl::status::success); \
+        status_t _status_ = f; \
+        assert(_status_ == status::success); \
         MAYBE_UNUSED(_status_); \
     } while (0)
 
@@ -641,9 +641,6 @@ std::string getenv_string_user(const char *name);
 bool get_jit_dump();
 unsigned get_jit_profiling_flags();
 std::string get_jit_profiling_jitdumpdir();
-// Checks if the filepath is a valid path and not a symlink to ensure
-// the application only processes secure files.
-status_t check_for_symlinks(const char *filename, bool *res);
 FILE *fopen(const char *filename, const char *mode);
 int getpagesize();
 
@@ -706,6 +703,32 @@ inline int float2int(float x) {
 inline float int2float(int x) {
     return utils::bit_cast<float>(x);
 }
+
+// XXX: Currently SYCL doesn't provide an API to get device UUID but
+// we need to be able to distinguish OpenCL device from Level0 device.
+// As a temporary solution the compound ID will be used for that.
+// Below is a table explaning what the numbers are for different backends:
+//
+// -------------------------------------------------------------
+//  Backend      | Compound ID
+// -------------------------------------------------------------
+//  Host         | <backend_t::host, 0, 0>
+//  OpenCL       | <backend_t::opencl, cl_device, 0>
+//  NVIDIA       | <backend_t::nvidia, cuDevice, 0>
+//  Level0       | <backend_t::level0, uuid[0-63], uuid[64-127]>
+//  Pure CPU     | <0, 0, 0>
+//  Pure GPU     | <0, cl_device, 0>
+using device_id_t = std::tuple<int, uint64_t, uint64_t>;
+
+struct device_id_hash_t {
+    size_t operator()(const device_id_t &id) const {
+        size_t result = 0;
+        result = hash_combine(result, std::get<0>(id));
+        result = hash_combine(result, std::get<1>(id));
+        result = hash_combine(result, std::get<2>(id));
+        return result;
+    }
+};
 
 // A setting (basically a value) that can be set() multiple times until the
 // time first time the get() method is called. The set() method is expected to
@@ -780,48 +803,6 @@ struct nop_deleter_t {
 template <typename T>
 using maybe_unique_ptr = std::unique_ptr<T, nop_deleter_t>;
 #endif // DNNL_MAYBE_UNIQUE_PTR_IS_UNIQUE
-
-// Common abstraction to manipulate nibbles in memory as pairs
-struct nibble2_t {
-
-    // constructs a nibble pair from a pair of uint8_t values
-    nibble2_t(uint8_t low_, uint8_t high_) {
-        low = low_;
-        high = high_;
-    }
-
-    // constructs a nibble pairs from an uin8_t, taking its low and high part
-    nibble2_t(uint8_t pack_) {
-        low = pack_ & 0xf;
-        high = (pack_ >> 4) & 0xf;
-    }
-
-    // sets low (idx=0) or high (idx=1)  nibble.
-    inline void set(uint8_t val, int idx) {
-        switch (idx) {
-            case 0: low = val; return;
-            case 1: high = val; return;
-            default: assert(!"Out of range index"); return;
-        }
-    }
-
-    // returns low (idx = 0) or high (idx = 1) nibble in a uint8_t
-    inline uint8_t get(int idx) const {
-        switch (idx) {
-            case 0: return low;
-            case 1: return high;
-            default: assert(!"out of range index"); return 0;
-        }
-    }
-
-    // returns pair of nibbles as uint8t
-    inline uint8_t get() const { return high << 4 | low; }
-
-private:
-    uint8_t low : 4;
-    uint8_t high : 4;
-};
-static_assert(sizeof(nibble2_t) == 1, "nibble2_t must be 1 byte");
 
 } // namespace impl
 } // namespace dnnl

@@ -185,7 +185,7 @@ dnnl_status_t try_cblas_gemm_s8u8s32(const char *transa, const char *transb,
 #endif
 }
 
-dnnl_status_t gemm_s8u8s32(const char *transa, const char *transb,
+dnnl_status_t gemm_s8x8s32(const char *transa, const char *transb,
         const char *offsetc, const dim_t *M, const dim_t *N, const dim_t *K,
         const float *alpha, const int8_t *A, const dim_t *LDA, const int8_t *ao,
         const uint8_t *B, const dim_t *LDB, const uint8_t *bo,
@@ -226,7 +226,7 @@ dnnl_status_t gemm_s8u8s32(const char *transa, const char *transb,
             B, LDB, bo, beta, C, LDC, co);
 }
 
-dnnl_status_t gemm_s8s8s32(const char *transa, const char *transb,
+dnnl_status_t gemm_s8x8s32(const char *transa, const char *transb,
         const char *offsetc, const dim_t *M, const dim_t *N, const dim_t *K,
         const float *alpha, const int8_t *A, const dim_t *LDA, const int8_t *ao,
         const int8_t *B, const dim_t *LDB, const int8_t *bo, const float *beta,
@@ -239,7 +239,7 @@ dnnl_status_t gemm_s8s8s32(const char *transa, const char *transb,
     if (*M == 0 || *N == 0 || *K == 0) return dnnl_success;
 
 #if DNNL_X64 && !__BUILD_GEMM_NONE
-    bool use_jit = mayiuse(avx512_core) && __BUILD_GEMM_AVX512;
+    bool use_jit = mayiuse(avx512_core);
     bool use_s8u8 = true
             && utils::everyone_is(0, *ao, *bo) // so far a requirement
             && IMPLICATION(USE_MKL_IGEMM == 0, mayiuse(sse41));
@@ -297,7 +297,7 @@ dnnl_status_t gemm_bf16bf16f32(const char *transa, const char *transb,
     bfloat16_t *dummy_bo = nullptr;
     float *dummy_co = nullptr;
 
-    if (mayiuse(avx512_core) && __BUILD_GEMM_AVX512) {
+    if (mayiuse(avx512_core)) {
         auto status = gemm_driver(transa, transb, dummyOffsetC, M, N, K, alpha,
                 (const bfloat16_t *)A, lda, dummy_ao, (const bfloat16_t *)B,
                 ldb, dummy_bo, beta, (float *)C, ldc, dummy_co, false);

@@ -125,20 +125,15 @@ public:
                 continue;
             // for each pattern. match it
             std::vector<std::vector<op_t *>> fusion_ops;
-            if (get_verbose(verbose_t::create_dispatch, component_t::graph)) {
-                verbose_printf(
-                        "graph,create:dispatch,pattern_matcher,%s,dnnl_"
-                        "backend\n",
-                        get_pass_name().c_str());
-            }
             pu.match(agraph, pgraph, fusion_ops);
             if (!fusion_ops.empty()) {
                 // temporary solution here for showing which pattern matched
                 if (getenv_int_user("GRAPH_DUMP", 0) > 0
                         || graph::utils::check_verbose_string_user(
                                 "GRAPH_DUMP", "pattern")) {
-                    verbose_printf("graph,info,pattern,hit,%s\n",
+                    printf("onednn_graph_verbose,info,pattern,hit,%s\n",
                             get_pass_name().c_str());
+                    fflush(stdout);
                 }
 
                 pu.init_partition(

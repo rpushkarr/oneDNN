@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2024 Intel Corporation
+* Copyright 2022-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -52,9 +52,8 @@ status_t fwd_conv_desc_create(const deconvolution_desc_t *fwd_deconv_d,
     dims_t overflow_r;
     dim_t ks = 1;
     for (int i = 0; i < ndims_spatial; i++) {
-        VDISPATCH_DECONVOLUTION_IC(fwd_deconv_d->strides[i] == 1,
-                VERBOSE_UNSUPPORTED_FEATURE,
-                "only unit strides are allowed for bwd-to-fwd conversion");
+        // only unit strides are allowed for bwd-to-fwd conversion
+        if (fwd_deconv_d->strides[i] != 1) return status::unimplemented;
         const dim_t K
                 = fwd_weights_md.dims[fwd_weights_md.ndims - ndims_spatial + i];
         ks *= K;
@@ -67,14 +66,11 @@ status_t fwd_conv_desc_create(const deconvolution_desc_t *fwd_deconv_d,
         overflow_r[i] = ((K - 1) * (D + 1) - PR) / S;
     }
 
-    const status_t desc_init_status = conv_desc_init(fwd_conv_d,
-            prop_kind::forward_training, alg_kind::convolution_direct,
-            &fwd_deconv_d->src_desc, &fwd_weights_md, &fwd_deconv_d->bias_desc,
-            &fwd_deconv_d->dst_desc, fwd_deconv_d->strides,
-            fwd_deconv_d->dilates, overflow_l, overflow_r);
-
-    VDISPATCH_DECONVOLUTION_IC(desc_init_status == status::success,
-            VERBOSE_PRIMITIVE_CREATION_FAIL, "fwd_conv");
+    CHECK(conv_desc_init(fwd_conv_d, prop_kind::forward_training,
+            alg_kind::convolution_direct, &fwd_deconv_d->src_desc,
+            &fwd_weights_md, &fwd_deconv_d->bias_desc, &fwd_deconv_d->dst_desc,
+            fwd_deconv_d->strides, fwd_deconv_d->dilates, overflow_l,
+            overflow_r));
 
     // HACK: Set diff_src_desc and diff_dst_desc as a signal to the primitive
     //       descriptor cache that we are using the bwd-via-fwd version of
@@ -89,8 +85,6 @@ status_t fwd_conv_desc_create(const deconvolution_desc_t *fwd_deconv_d,
         fwd_conv_d->diff_src_desc = fwd_conv_d->src_desc;
         fwd_conv_d->diff_dst_desc = fwd_conv_d->dst_desc;
     }
-    // Note: internal field to hint this conv is created from deconv.
-    fwd_conv_d->use_inversion = true;
     return status::success;
 }
 
@@ -100,10 +94,8 @@ status_t bwd_conv_desc_create(const deconvolution_desc_t *fwd_deconv_d,
     memory_desc_t src_md_patched;
     const auto src_dt = fwd_deconv_d->dst_desc.data_type;
 
-    VDISPATCH_DECONVOLUTION_IC(memory_desc_init_by_md_and_dt(src_md_patched,
-                                       fwd_deconv_d->dst_desc, src_dt)
-                    == status::success,
-            VERBOSE_DESC_CREATION_FAIL, "memory");
+    CHECK(memory_desc_init_by_md_and_dt(
+            src_md_patched, fwd_deconv_d->dst_desc, src_dt));
     src_md = &src_md_patched;
     dst_md = &fwd_deconv_d->src_desc;
     deconv_weights_d = &fwd_deconv_d->weights_desc;
@@ -111,19 +103,14 @@ status_t bwd_conv_desc_create(const deconvolution_desc_t *fwd_deconv_d,
     /* create weights desc for convolution */
     memory_desc_t conv_weights_d;
     const bool with_groups = deconv_weights_d->ndims == src_md->ndims + 1;
+    CHECK(weights_axes_permutation(
+            &conv_weights_d, deconv_weights_d, with_groups));
 
-    VDISPATCH_DECONVOLUTION_IC(weights_axes_permutation(&conv_weights_d,
-                                       deconv_weights_d, with_groups)
-                    == status::success,
-            VERBOSE_DESC_CREATION_FAIL, "weights");
-
-    const status_t desc_init_status = conv_desc_init(bwd_conv_d,
-            prop_kind::backward_data, alg_kind::convolution_direct, src_md,
-            &conv_weights_d, &fwd_deconv_d->bias_desc, dst_md,
-            fwd_deconv_d->strides, fwd_deconv_d->dilates,
-            fwd_deconv_d->padding[0], fwd_deconv_d->padding[1]);
-    VDISPATCH_DECONVOLUTION_IC(desc_init_status == status::success,
-            VERBOSE_PRIMITIVE_CREATION_FAIL, "bwd_conv");
+    CHECK(conv_desc_init(bwd_conv_d, prop_kind::backward_data,
+            alg_kind::convolution_direct, src_md, &conv_weights_d,
+            &fwd_deconv_d->bias_desc, dst_md, fwd_deconv_d->strides,
+            fwd_deconv_d->dilates, fwd_deconv_d->padding[0],
+            fwd_deconv_d->padding[1]));
 
     // HACK: Set src_desc and dst_desc as a signal to the primitive
     //       descriptor cache that we are using the deconv version of bwd conv
@@ -135,10 +122,6 @@ status_t bwd_conv_desc_create(const deconvolution_desc_t *fwd_deconv_d,
     //       directly into bwd conv implementations.
     bwd_conv_d->src_desc = bwd_conv_d->diff_src_desc;
     bwd_conv_d->dst_desc = bwd_conv_d->diff_dst_desc;
-
-    // Note: internal field to hint this conv is created from deconv.
-    bwd_conv_d->use_inversion = true;
-
     return status::success;
 }
 } // namespace
@@ -165,18 +148,13 @@ status_t brgemm_deconvolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
     if (is_int8)
         skip_mask |= smask_t::scales_runtime | smask_t::zero_points_runtime;
 
-    VDISPATCH_DECONVOLUTION(is_fwd(), VERBOSE_BAD_PROPKIND);
-    VDISPATCH_DECONVOLUTION((desc()->alg_kind & alg_kind::deconvolution_direct),
-            VERBOSE_BAD_ALGORITHM);
-    VDISPATCH_DECONVOLUTION(attr()->has_default_values(skip_mask, dst_type),
-            VERBOSE_UNSUPPORTED_ATTR);
-    VDISPATCH_DECONVOLUTION(
-            attr()->post_ops_.check_sum_consistency(dst_type, is_int8),
-            VERBOSE_UNSUPPORTED_POSTOP);
-    VDISPATCH_DECONVOLUTION(attr_scales_ok(), VERBOSE_UNSUPPORTED_SCALES_CFG);
-    VDISPATCH_DECONVOLUTION(post_ops_ok(), VERBOSE_UNSUPPORTED_POSTOP);
-    VDISPATCH_DECONVOLUTION(zero_points_ok(), VERBOSE_UNSUPPORTED_ZP_CFG);
-    VDISPATCH_DECONVOLUTION(!has_zero_dim_memory(), VERBOSE_EMPTY_TENSOR, "");
+    const bool ok = is_fwd()
+            && (desc()->alg_kind & alg_kind::deconvolution_direct)
+            && attr()->has_default_values(skip_mask, dst_type)
+            && attr()->post_ops_.check_sum_consistency(dst_type, is_int8)
+            && attr_scales_ok() && post_ops_ok() && zero_points_ok()
+            && !has_zero_dim_memory();
+    if (!ok) return status::unimplemented;
 
     convolution_desc_t conv_d = convolution_desc_t();
 
@@ -198,15 +176,15 @@ status_t brgemm_deconvolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
 
         while (++it != it.end()) {
             conv_pd_ = *it;
+            // flag used to enable post-ops and properly disable zero-points
+            constexpr bool is_deconv = true;
             if (check_embedded_impl_init<
-                        typename brgemm_convolution_bwd_strided_t<isa>::pd_t>(
-                        it)
+                        typename brgemm_convolution_bwd_strided_t<isa,
+                                is_deconv>::pd_t>(it)
                     == status::success)
                 break;
         }
-        if (it == it.end())
-            VDISPATCH_DECONVOLUTION_IC(false,
-                    "brgemm implementation not found for strided convolution");
+        if (it == it.end()) return status::unimplemented;
     } else {
         CHECK(fwd_conv_desc_create(fwd_deconv_d, &conv_d));
 
@@ -222,22 +200,19 @@ status_t brgemm_deconvolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
                     == status::success)
                 break;
             // try non-1x1 fwd convolution with invert weights' spatial indices
-            if (check_embedded_impl_init<
-                        typename brgemm_convolution_fwd_t<isa>::pd_t>(it)
+            constexpr bool use_inversion = true;
+            if (check_embedded_impl_init<typename brgemm_convolution_fwd_t<isa,
+                            use_inversion>::pd_t>(it)
                     == status::success)
                 break;
         }
-        if (it == it.end())
-            VDISPATCH_DECONVOLUTION_IC(false,
-                    "brgemm implementation not found for strided convolution");
+        if (it == it.end()) return status::unimplemented;
     }
 
     if (weights_md_.format_kind == format_kind::any) {
         if (has_strides_) {
-            const status_t desc_init_status = weights_axes_permutation(
-                    &weights_md_, conv_pd_->weights_md(), with_groups());
-            VDISPATCH_DECONVOLUTION_IC(desc_init_status == status::success,
-                    VERBOSE_DESC_CREATION_FAIL, "weights");
+            CHECK(weights_axes_permutation(
+                    &weights_md_, conv_pd_->weights_md(), with_groups()));
             const bool is_signed_input = src_type == s8;
             const bool scale_adjust_required = is_signed_input
                     && !isa_has_s8s8(isa) && !isa_has_int8_vnni(isa);

@@ -29,6 +29,11 @@
 
 #include "cpu/ref_io_helper.hpp"
 
+// Use `...` for `msg` and additional variables used in msg
+#define VCHECK_ATTR(cond, ...) \
+    VCONDCHECK(primitive, exec, check, primitive, (cond), \
+            status::invalid_arguments, __VA_ARGS__)
+
 #define DEFINE_SCALES_BUFFER_ATTR_ARG(attr, scales, arg) \
     alignas(16) float CONCAT2(scales, _buf16)[16] = {0}; \
     const float *scales {nullptr}; \
@@ -70,9 +75,8 @@
             VCHECK_ATTR(scales != nullptr, \
                     "Scales buffer for arg %d is missing", arg); \
             const auto scales_d = ctx.memory_mdw(DNNL_ARG_ATTR_SCALES | arg); \
-            VCHECK_ATTR( \
-                    utils::one_of(scales_d.data_type(), data_type::f32, \
-                            data_type::f16, data_type::bf16, data_type::e8m0), \
+            VCHECK_ATTR(utils::one_of(scales_d.data_type(), data_type::f32, \
+                                data_type::f16, data_type::bf16), \
                     "Unsupported scales data type"); \
             if (scales_d.nelems() == 1) { \
                 const float s = cpu::io::load_float_value( \
@@ -128,8 +132,7 @@
         const auto zero_points_d \
                 = ctx.memory_mdw(DNNL_ARG_ATTR_ZERO_POINTS | mem_arg); \
         VCHECK_ATTR(utils::one_of(zero_points_d.data_type(), data_type::s32, \
-                            data_type::s8, data_type::u8, data_type::s4, \
-                            data_type::u4), \
+                            data_type::s8, data_type::u8), \
                 "Unsupported zero points type"); \
         VCHECK_ATTR(zero_points_d.dims()[0] == 1, \
                 "Not a single zero points was provided"); \
@@ -137,8 +140,7 @@
                 const int32_t *, DNNL_ARG_ATTR_ZERO_POINTS | mem_arg); \
         VCHECK_ATTR(zero_points_ptr != nullptr, \
                 "Zero points buffer for arg %d is missing", mem_arg); \
-        zero_point = cpu::io::load_int_value( \
-                zero_points_d.data_type(), zero_points_ptr, 0); \
+        zero_point = *zero_points_ptr; \
     } \
     MAYBE_UNUSED(zero_point);
 

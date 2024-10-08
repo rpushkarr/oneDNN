@@ -85,21 +85,20 @@ requires different inputs and outputs. For clarity, a summary is shown below.
 When executed, the inputs and outputs should be mapped to an execution
 argument index as specified by the following table.
 
-| Primitive input/output      | Execution argument index                                                  |
-|-----------------------------|---------------------------------------------------------------------------|
-| \src                        | DNNL_ARG_SRC                                                              |
-| \f$\gamma\f$                | DNNL_ARG_SCALE                                                            |
-| \f$\beta\f$                 | DNNL_ARG_SHIFT                                                            |
-| mean (\f$\mu\f$)            | DNNL_ARG_MEAN                                                             |
-| variance (\f$\sigma\f$)     | DNNL_ARG_VARIANCE                                                         |
-| \dst                        | DNNL_ARG_DST                                                              |
-| \diffdst                    | DNNL_ARG_DIFF_DST                                                         |
-| \diffsrc                    | DNNL_ARG_DIFF_SRC                                                         |
-| \diffgamma                  | DNNL_ARG_DIFF_SCALE                                                       |
-| \diffbeta                   | DNNL_ARG_DIFF_SHIFT                                                       |
-| \f$src scale\f$             | DNNL_ARG_ATTR_SCALES \| DNNL_ARG_SRC                                      |
-| \f$dst scale\f$             | DNNL_ARG_ATTR_SCALES \| DNNL_ARG_DST                                      |
-| \f$\text{binary post-op}\f$ | DNNL_ARG_ATTR_MULTIPLE_POST_OP(binary_post_op_position) \| DNNL_ARG_SRC_1 |
+| Primitive input/output  | Execution argument index             |
+|-------------------------|--------------------------------------|
+| \src                    | DNNL_ARG_SRC                         |
+| \f$\gamma\f$            | DNNL_ARG_SCALE                       |
+| \f$\beta\f$             | DNNL_ARG_SHIFT                       |
+| mean (\f$\mu\f$)        | DNNL_ARG_MEAN                        |
+| variance (\f$\sigma\f$) | DNNL_ARG_VARIANCE                    |
+| \dst                    | DNNL_ARG_DST                         |
+| \diffdst                | DNNL_ARG_DIFF_DST                    |
+| \diffsrc                | DNNL_ARG_DIFF_SRC                    |
+| \diffgamma              | DNNL_ARG_DIFF_SCALE                  |
+| \diffbeta               | DNNL_ARG_DIFF_SHIFT                  |
+| \f$src scale\f$         | DNNL_ARG_ATTR_SCALES \| DNNL_ARG_SRC |
+| \f$dst scale\f$         | DNNL_ARG_ATTR_SCALES \| DNNL_ARG_DST |
 
 
 ## Implementation Details
@@ -135,7 +134,6 @@ primitive:
 | Propagation | Type      | Operation                                            | Description                                                   | Restrictions                                                                       |
 |:------------|:----------|:-----------------------------------------------------|:--------------------------------------------------------------|:-----------------------------------------------------------------------------------|
 | forward     | attribute | [Scales](@ref dnnl::primitive_attr::set_scales_mask) | Scales the corresponding tensor by the given scale factor(s). | Supported only for int8 layer normalization and one scale per tensor is supported. |
-| forward     | Post-op   | [Binary](@ref dnnl::post_ops::append_binary)         | Applies a @ref dnnl_api_binary operation to the result.       | General binary post-op restrictions.                                               |
 
 ### Data Type Support
 
@@ -194,7 +192,8 @@ The layer normalization primitive is optimized for the following memory formats:
 
 2. **GPU**
    - Only tensors of 6 or fewer dimensions are supported.
-   - Post-ops are not supported.
+   - Different data types for source and destination are not supported.
+   - Only f32 data type is supported for scale and shift
 
 ## Performance Tips
 1. For data tensors \src, \dst, \diffsrc, and \diffdst, use memory formats

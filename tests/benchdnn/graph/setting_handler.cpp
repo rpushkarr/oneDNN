@@ -15,7 +15,6 @@
 *******************************************************************************/
 
 #include "setting_handler.hpp"
-#include "graph/utils.hpp"
 
 namespace graph {
 
@@ -25,6 +24,48 @@ namespace graph {
                 __LINE__); \
         (res)->state = INVALID_ARGUMENTS; \
     }
+
+dnnl_data_type_t convert_dt(const dnnl::graph::logical_tensor::data_type dt) {
+    using graph_dt = dnnl::graph::logical_tensor::data_type;
+
+    switch (dt) {
+        case graph_dt::f16: return dnnl_f16;
+        case graph_dt::bf16: return dnnl_bf16;
+        case graph_dt::f32: return dnnl_f32;
+        case graph_dt::s32: return dnnl_s32;
+        case graph_dt::s8: return dnnl_s8;
+        case graph_dt::u8: return dnnl_u8;
+        // use u8 instead of boolean in the reference path
+        // dnn_graph_mem_t will use the data type from the logical tensor and the u8 data handle
+        case graph_dt::boolean: return dnnl_u8;
+        case graph_dt::f8_e5m2: return dnnl_f8_e5m2;
+        case graph_dt::f8_e4m3: return dnnl_f8_e4m3;
+        case graph_dt::undef:
+        default: return dnnl_data_type_undef;
+    }
+}
+
+logical_tensor::data_type get_data_type(const std::string &data_type) {
+    if (data_type == "f32") {
+        return logical_tensor::data_type::f32;
+    } else if (data_type == "f16") {
+        return logical_tensor::data_type::f16;
+    } else if (data_type == "s8") {
+        return logical_tensor::data_type::s8;
+    } else if (data_type == "u8") {
+        return logical_tensor::data_type::u8;
+    } else if (data_type == "bf16") {
+        return logical_tensor::data_type::bf16;
+    } else if (data_type == "s32") {
+        return logical_tensor::data_type::s32;
+    } else if (data_type == "f8_e5m2") {
+        return logical_tensor::data_type::f8_e5m2;
+    } else if (data_type == "f8_e4m3") {
+        return logical_tensor::data_type::f8_e4m3;
+    } else {
+        return logical_tensor::data_type::undef;
+    }
+}
 
 void assign_stride_padding_val(bool has_h, bool has_d, int64_t &w, int64_t &h,
         int64_t &d, const std::vector<int64_t> &val_, int64_t default_val) {
@@ -72,15 +113,6 @@ void assign_shape_val(int64_t &c, int64_t &w, int64_t &h, int64_t &d,
     h = has_h ? ncx_shape[ndims - 2] : 1;
     d = has_d ? ncx_shape[2] : 1;
 };
-
-bool get_graph_attr(const deserialized_op &base_op_ref,
-        attr_t::fpmath_mode_t &arg_fpmath_mode) {
-
-    const auto &fpmath_mode = base_op_ref.fpmath_mode_;
-    arg_fpmath_mode.set(str2fpmath_mode(fpmath_mode.c_str()));
-
-    return true;
-}
 
 bool get_driver_tag_by_idx(const deserialized_op &base_op_ref, std::string &tag,
         int idx = 0, bool from_output = false) {
@@ -139,8 +171,8 @@ void extend_dims(::graph::deserialized_lt &lt, size_t ndims) {
 
 namespace custom {
 
-::custom::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
+::custom::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::custom::settings_t op_setting;
     auto opkind = opstr2kind(base_op_ref.kind_);
     switch (opkind) {
@@ -160,21 +192,16 @@ namespace custom {
             res->state = res_state_t::INVALID_ARGUMENTS;
             return op_setting;
     }
-    // Select op has boolean weights. It requires special handling for dt
-    // conversion because custom driver prb values directly translate into graph
-    // objects, there's no intermediate primitive layer that can be instructed
-    // to have f32 data type.
-    const bool op_is_select = opkind == ::graph::op::kind::Select;
-
     for (size_t i = 0; i < base_op_ref.in_lts_.size(); i++) {
-        const auto arg = get_prim_arg_name_from_graph_op_input_offset(
+        auto arg = get_prim_arg_name_from_graph_op_input_offset(
                 opkind, static_cast<int>(i));
-        const auto &lt = base_op_ref.in_lts_[i];
-        auto dim = lt.shape_;
-        const auto orig_dt = convert_dt(lt.get_data_type());
-        const auto dt
-                = op_is_select && arg == DNNL_ARG_WEIGHTS ? orig_dt : dnnl_f32;
-        auto tag = strides2memory_tag(lt.stride_.size(), lt.stride_, false);
+        auto dim = base_op_ref.in_lts_[i].shape_;
+        auto dt = rewrite_lt_ids.find(base_op_ref.in_lts_[i].id_)
+                        == rewrite_lt_ids.end()
+                ? convert_dt(base_op_ref.in_lts_[i].get_data_type())
+                : dnnl_f32;
+        auto tag = strides2memory_tag(base_op_ref.in_lts_[i].stride_.size(),
+                base_op_ref.in_lts_[i].stride_, false);
 
         // 0-dim means scalar input in graph, extend to 1-dim to match behavior.
         if (dim.empty()) {
@@ -186,12 +213,13 @@ namespace custom {
     for (size_t i = 0; i < base_op_ref.out_lts_.size(); i++) {
         auto arg = get_prim_arg_name_from_graph_op_output_offset(
                 opkind, static_cast<int>(i));
-        const auto &lt = base_op_ref.out_lts_[i];
-        auto dim = lt.shape_;
-        const auto orig_dt = convert_dt(lt.get_data_type());
-        const auto dt
-                = op_is_select && arg == DNNL_ARG_WEIGHTS ? orig_dt : dnnl_f32;
-        auto tag = strides2memory_tag(lt.stride_.size(), lt.stride_, false);
+        auto dim = base_op_ref.out_lts_[i].shape_;
+        auto dt = rewrite_lt_ids.find(base_op_ref.out_lts_[i].id_)
+                        == rewrite_lt_ids.end()
+                ? convert_dt(base_op_ref.out_lts_[i].get_data_type())
+                : dnnl_f32;
+        auto tag = strides2memory_tag(base_op_ref.out_lts_[i].stride_.size(),
+                base_op_ref.out_lts_[i].stride_, false);
 
         // 0-dim means scalar input in graph, extend to 1-dim to match behavior.
         if (dim.empty()) {
@@ -254,11 +282,20 @@ bool get_binary_prb_vdims(
     return true;
 }
 
-bool get_binary_sdt_and_ddt(
-        const deserialized_op &base_op_ref, ::binary::settings_t &op_setting) {
+bool get_binary_sdt_and_ddt(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids,
+        ::binary::settings_t &op_setting) {
     auto sdt0 = convert_dt(base_op_ref.in_lts_[0].get_data_type());
     auto sdt1 = convert_dt(base_op_ref.in_lts_[1].get_data_type());
     auto ddt = convert_dt(base_op_ref.out_lts_[0].get_data_type());
+
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_[0].id_) != rewrite_lt_ids.end())
+        sdt0 = dnnl_f32;
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_[1].id_) != rewrite_lt_ids.end())
+        sdt1 = dnnl_f32;
+    if (rewrite_lt_ids.find(base_op_ref.out_lts_[0].id_)
+            != rewrite_lt_ids.end())
+        ddt = dnnl_f32;
 
     op_setting.sdt = {{sdt0, sdt1}};
     op_setting.ddt.front() = ddt;
@@ -296,15 +333,16 @@ bool get_binary_alg(const deserialized_op &base_op_ref, ::binary::alg_t &alg) {
     return true;
 }
 
-::binary::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
+::binary::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::binary::settings_t op_setting;
     DNN_GRAPH_CHECK_SETTINGS(
             binary::get_binary_prb_vdims(base_op_ref, op_setting.prb_vdims),
             res);
 
-    DNN_GRAPH_CHECK_SETTINGS(
-            binary::get_binary_sdt_and_ddt(base_op_ref, op_setting), res);
+    DNN_GRAPH_CHECK_SETTINGS(binary::get_binary_sdt_and_ddt(
+                                     base_op_ref, rewrite_lt_ids, op_setting),
+            res);
 
     DNN_GRAPH_CHECK_SETTINGS(
             binary::get_binary_stag_and_dtag(base_op_ref, op_setting), res);
@@ -312,8 +350,6 @@ bool get_binary_alg(const deserialized_op &base_op_ref, ::binary::alg_t &alg) {
     DNN_GRAPH_CHECK_SETTINGS(
             binary::get_binary_alg(base_op_ref, op_setting.alg.front()), res);
 
-    DNN_GRAPH_CHECK_SETTINGS(
-            get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
     return op_setting;
 }
 
@@ -351,8 +387,12 @@ bool get_bnorm_dir(const deserialized_op &base_op_ref, dir_t &dir) {
     return true;
 }
 
-bool get_bnorm_dt(const deserialized_op &base_op_ref, dnnl_data_type_t &dt) {
+bool get_bnorm_dt(const deserialized_op &base_op_ref, dnnl_data_type_t &dt,
+        const std::unordered_set<size_t> &rewrite_lt_ids) {
     dt = convert_dt(base_op_ref.in_lts_.front().get_data_type());
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_.front().id_)
+            != rewrite_lt_ids.end())
+        dt = dnnl_f32;
     return true;
 }
 
@@ -384,21 +424,20 @@ bool get_bnorm_flag(
     return true;
 }
 
-::bnorm::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
+::bnorm::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::bnorm::settings_t op_setting;
     DNN_GRAPH_CHECK_SETTINGS(
             bnorm::get_bnorm_desc(base_op_ref, op_setting.desc), res);
     DNN_GRAPH_CHECK_SETTINGS(
             bnorm::get_bnorm_dir(base_op_ref, op_setting.dir.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            bnorm::get_bnorm_dt(base_op_ref, op_setting.dt.front()), res);
+    DNN_GRAPH_CHECK_SETTINGS(bnorm::get_bnorm_dt(base_op_ref,
+                                     op_setting.dt.front(), rewrite_lt_ids),
+            res);
     DNN_GRAPH_CHECK_SETTINGS(
             get_driver_tag(base_op_ref, op_setting.tag.front()), res);
     DNN_GRAPH_CHECK_SETTINGS(
             bnorm::get_bnorm_flag(base_op_ref, op_setting.flags.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
     return op_setting;
 }
 
@@ -416,9 +455,14 @@ bool get_concat_prb_vdims(
     return true;
 }
 
-bool get_concat_sdt_and_ddt(
-        const deserialized_op &base_op_ref, ::concat::settings_t &op_setting) {
-    const auto &dt = convert_dt(base_op_ref.in_lts_.front().get_data_type());
+bool get_concat_sdt_and_ddt(const deserialized_op &base_op_ref,
+        ::concat::settings_t &op_setting,
+        const std::unordered_set<size_t> &rewrite_lt_ids) {
+    const auto &in_dt = convert_dt(base_op_ref.in_lts_.front().get_data_type());
+    dnnl_data_type_t dt = in_dt;
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_.front().id_)
+            != rewrite_lt_ids.end())
+        dt = dnnl_f32;
     op_setting.sdt.front() = dt;
     op_setting.ddt.front() = dt;
     return true;
@@ -439,22 +483,22 @@ bool get_concat_stag_and_dtag(
     return true;
 }
 
-::concat::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
+::concat::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::concat::settings_t op_setting;
     DNN_GRAPH_CHECK_SETTINGS(
             concat::get_concat_prb_vdims(base_op_ref, op_setting.prb_vdims),
             res);
 
-    DNN_GRAPH_CHECK_SETTINGS(
-            concat::get_concat_sdt_and_ddt(base_op_ref, op_setting), res);
+    DNN_GRAPH_CHECK_SETTINGS(concat::get_concat_sdt_and_ddt(
+                                     base_op_ref, op_setting, rewrite_lt_ids),
+            res);
+
     DNN_GRAPH_CHECK_SETTINGS(
             concat::get_concat_stag_and_dtag(base_op_ref, op_setting), res);
 
     DNN_GRAPH_CHECK_SETTINGS(
             get_driver_axis(base_op_ref, op_setting.axis.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
 
     return op_setting;
 }
@@ -553,12 +597,21 @@ bool get_conv_dir(const deserialized_op &base_op_ref, dir_t &dir) {
     return true;
 }
 
-bool get_conv_dt(
-        const deserialized_op &base_op_ref, std::vector<dnnl_data_type_t> &dt) {
-    dnnl_data_type_t src_dt, wei_dt, dst_dt;
-    auto in_lt0_dt = convert_dt(base_op_ref.in_lts_[0].get_data_type());
-    auto in_lt1_dt = convert_dt(base_op_ref.in_lts_[1].get_data_type());
-    auto out_lt_dt = convert_dt(base_op_ref.out_lts_[0].get_data_type());
+bool get_conv_dt(const deserialized_op &base_op_ref,
+        std::vector<dnnl_data_type_t> &dt,
+        const std::unordered_set<size_t> &rewrite_lt_ids) {
+    std::string src_dt {}, wei_dt {}, dst_dt {};
+    auto in_lt0_dt = base_op_ref.in_lts_[0].data_type_;
+    auto in_lt1_dt = base_op_ref.in_lts_[1].data_type_;
+    auto out_lt_dt = base_op_ref.out_lts_[0].data_type_;
+
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_[0].id_) != rewrite_lt_ids.end())
+        in_lt0_dt = "f32";
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_[1].id_) != rewrite_lt_ids.end())
+        in_lt1_dt = "f32";
+    if (rewrite_lt_ids.find(base_op_ref.out_lts_[0].id_)
+            != rewrite_lt_ids.end())
+        out_lt_dt = "f32";
 
     const auto &op_kind = base_op_ref.kind_;
 
@@ -579,7 +632,8 @@ bool get_conv_dt(
         return false;
     }
 
-    dt = {src_dt, wei_dt, dst_dt};
+    dt = {convert_dt(get_data_type(src_dt)), convert_dt(get_data_type(wei_dt)),
+            convert_dt(get_data_type(dst_dt))};
 
     return true;
 }
@@ -648,20 +702,20 @@ bool get_conv_stag_and_dtag(
     return true;
 }
 
-::conv::settings_t get_setting(const deserialized_op &base_op_ref, res_t *res) {
+::conv::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::conv::settings_t op_setting;
     DNN_GRAPH_CHECK_SETTINGS(
             conv::get_conv_desc(base_op_ref, op_setting.desc), res);
     DNN_GRAPH_CHECK_SETTINGS(
             conv::get_conv_dir(base_op_ref, op_setting.dir.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            conv::get_conv_dt(base_op_ref, op_setting.dt.front()), res);
+    DNN_GRAPH_CHECK_SETTINGS(conv::get_conv_dt(base_op_ref,
+                                     op_setting.dt.front(), rewrite_lt_ids),
+            res);
     DNN_GRAPH_CHECK_SETTINGS(
             conv::get_conv_stag_and_dtag(base_op_ref, op_setting), res);
     DNN_GRAPH_CHECK_SETTINGS(
             conv::get_conv_wtag(base_op_ref, op_setting.wtag.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
 
     return op_setting;
 }
@@ -760,12 +814,22 @@ bool get_deconv_dir(const deserialized_op &base_op_ref, dir_t &dir) {
     return ret;
 }
 
-bool get_deconv_dt(
-        const deserialized_op &base_op_ref, std::vector<dnnl_data_type_t> &dt) {
-    dnnl_data_type_t src_dt, wei_dt, dst_dt;
-    auto in_lt0_dt = convert_dt(base_op_ref.in_lts_[0].get_data_type());
-    auto in_lt1_dt = convert_dt(base_op_ref.in_lts_[1].get_data_type());
-    auto out_lt_dt = convert_dt(base_op_ref.out_lts_[0].get_data_type());
+bool get_deconv_dt(const deserialized_op &base_op_ref,
+        std::vector<dnnl_data_type_t> &dt,
+        const std::unordered_set<size_t> &rewrite_lt_ids) {
+    std::string src_dt {}, wei_dt {}, dst_dt {};
+    auto in_lt0_dt = base_op_ref.in_lts_[0].data_type_;
+    auto in_lt1_dt = base_op_ref.in_lts_[1].data_type_;
+    auto out_lt_dt = base_op_ref.out_lts_[0].data_type_;
+
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_[0].id_) != rewrite_lt_ids.end())
+        in_lt0_dt = "f32";
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_[1].id_) != rewrite_lt_ids.end())
+        in_lt1_dt = "f32";
+    if (rewrite_lt_ids.find(base_op_ref.out_lts_[0].id_)
+            != rewrite_lt_ids.end())
+        out_lt_dt = "f32";
+
     const auto &op_kind = base_op_ref.kind_;
 
     if (op_kind == "ConvTranspose") {
@@ -785,7 +849,8 @@ bool get_deconv_dt(
         return false;
     }
 
-    dt = {src_dt, wei_dt, dst_dt};
+    dt = {convert_dt(get_data_type(src_dt)), convert_dt(get_data_type(wei_dt)),
+            convert_dt(get_data_type(dst_dt))};
 
     return true;
 }
@@ -830,15 +895,16 @@ bool get_deconv_wtag(const deserialized_op &base_op_ref, std::string &tag) {
     return true;
 }
 
-::deconv::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
+::deconv::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::deconv::settings_t op_setting;
     DNN_GRAPH_CHECK_SETTINGS(
             deconv::get_deconv_desc(base_op_ref, op_setting.desc), res);
     DNN_GRAPH_CHECK_SETTINGS(
             deconv::get_deconv_dir(base_op_ref, op_setting.dir.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            deconv::get_deconv_dt(base_op_ref, op_setting.dt.front()), res);
+    DNN_GRAPH_CHECK_SETTINGS(deconv::get_deconv_dt(base_op_ref,
+                                     op_setting.dt.front(), rewrite_lt_ids),
+            res);
     DNN_GRAPH_CHECK_SETTINGS(
             get_driver_stag_and_dtag(base_op_ref, op_setting.stag.front(),
                     op_setting.dtag.front(),
@@ -846,8 +912,6 @@ bool get_deconv_wtag(const deserialized_op &base_op_ref, std::string &tag) {
             res);
     DNN_GRAPH_CHECK_SETTINGS(
             deconv::get_deconv_wtag(base_op_ref, op_setting.wtag.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
 
     return op_setting;
 }
@@ -910,8 +974,12 @@ bool get_eltwise_dir(const deserialized_op &base_op_ref, dir_t &dir) {
     return true;
 }
 
-bool get_eltwise_dt(const deserialized_op &base_op_ref, dnnl_data_type_t &dt) {
+bool get_eltwise_dt(const deserialized_op &base_op_ref, dnnl_data_type_t &dt,
+        const std::unordered_set<size_t> &rewrite_lt_ids) {
     dt = convert_dt(base_op_ref.in_lts_.front().get_data_type());
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_.front().id_)
+            != rewrite_lt_ids.end())
+        dt = dnnl_f32;
     return true;
 }
 
@@ -977,8 +1045,8 @@ bool get_eltwise_beta(const deserialized_op &base_op_ref, float &beta) {
     return true;
 }
 
-::eltwise::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
+::eltwise::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::eltwise::settings_t op_setting;
     const auto &map_kind_to_alg = get_eltwise_kind_map();
     DNN_GRAPH_CHECK_SETTINGS(
@@ -988,8 +1056,9 @@ bool get_eltwise_beta(const deserialized_op &base_op_ref, float &beta) {
             get_prb_dims(base_op_ref, op_setting.prb_dims), res);
     DNN_GRAPH_CHECK_SETTINGS(
             eltwise::get_eltwise_dir(base_op_ref, op_setting.dir.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            eltwise::get_eltwise_dt(base_op_ref, op_setting.dt.front()), res);
+    DNN_GRAPH_CHECK_SETTINGS(eltwise::get_eltwise_dt(base_op_ref,
+                                     op_setting.dt.front(), rewrite_lt_ids),
+            res);
     DNN_GRAPH_CHECK_SETTINGS(
             get_driver_tag(base_op_ref, op_setting.tag.front()), res);
     DNN_GRAPH_CHECK_SETTINGS(
@@ -1002,135 +1071,11 @@ bool get_eltwise_beta(const deserialized_op &base_op_ref, float &beta) {
     DNN_GRAPH_CHECK_SETTINGS(
             eltwise::get_eltwise_beta(base_op_ref, op_setting.beta.front()),
             res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
 
     return op_setting;
 }
 
 } // namespace eltwise
-
-namespace gnorm {
-
-bool get_gnorm_desc(const deserialized_op &base_op_ref, ::gnorm::desc_t &d) {
-    auto src_dims = base_op_ref.in_lts_[0].shape_;
-    if (base_op_ref.has_NXC_format()) {
-        src_dims = base_op_ref.get_NCX_shape(0, true);
-    }
-    d.ndims = static_cast<int>(src_dims.size());
-
-    base_op_ref.get_attr_s64(d.g, "groups");
-    d.mb = src_dims[0];
-    d.ic = src_dims[1];
-    d.id = d.ndims >= 5 ? src_dims[d.ndims - 3] : 1;
-    d.ih = d.ndims >= 4 ? src_dims[d.ndims - 2] : 1;
-    d.iw = d.ndims >= 3 ? src_dims[d.ndims - 1] : 1;
-
-    d.eps = 1e-5f;
-    base_op_ref.get_attr_f32(d.eps, "eps");
-
-    return true;
-}
-
-bool get_gnorm_dir(const deserialized_op &base_op_ref, dir_t &dir) {
-    const auto &op_kind = base_op_ref.kind_;
-    if (op_kind == "GroupNorm") {
-        bool keep_stats = false;
-
-        base_op_ref.get_attr_bool(keep_stats, "keep_stats");
-
-        const size_t out_size = base_op_ref.out_lts_.size();
-        // output: dst, mean(opt), var(opt)
-        if (out_size == 1) {
-            dir = dir_t::FWD_I;
-            if (keep_stats) return false;
-        } else if (out_size == 3) {
-            dir = dir_t::FWD_D;
-            if (!keep_stats) return false;
-        } else {
-            return false;
-        }
-        // TODO: GroupNormBackward
-    } else if (op_kind == "GroupNormBackward") {
-        assert(!"GroupNormBackward is not supported for now");
-    } else {
-        assert(!"unsupported op_kind");
-        return false;
-    }
-    return true;
-}
-
-bool get_gnorm_dt(
-        const deserialized_op &base_op_ref, std::vector<dnnl_data_type_t> &dt) {
-    auto src_dt = convert_dt(base_op_ref.in_lts_[0].get_data_type());
-    auto dst_dt = convert_dt(base_op_ref.out_lts_[0].get_data_type());
-    dt = {src_dt, dst_dt};
-    return true;
-}
-
-bool get_gnorm_flags(
-        const deserialized_op &base_op_ref, ::bnorm::flags_t &flags) {
-    bool use_affine = false;
-    base_op_ref.get_attr_bool(use_affine, "use_affine");
-    const auto &op_kind = base_op_ref.kind_;
-    const size_t in_size = base_op_ref.in_lts_.size();
-    if (op_kind == "GroupNorm") {
-        // input: src, gamma(opt), beta(opt)
-        if (use_affine) {
-            if (in_size == 3) {
-                flags = ::gnorm::USE_SCALE | ::gnorm::USE_SHIFT;
-            } else {
-                return false;
-            }
-        } else {
-            if (in_size == 1) {
-                flags = ::gnorm::NONE;
-            } else {
-                return false;
-            }
-        }
-        // TODO: add GroupNormBackward
-    } else if (op_kind == "GroupNormBackward") {
-        assert(!"GroupNormBackward is not supported for now");
-        return false;
-    } else {
-        assert(!"unsupported op_kind");
-        return false;
-    }
-    return true;
-}
-
-bool get_gnorm_stag_and_dtag(const deserialized_op &base_op_ref,
-        std::vector<std::vector<std::string>> &tag) {
-    // src and dst may have different tags.
-    std::string stag, dtag;
-    if (!get_driver_tag_by_idx(base_op_ref, dtag, 0, true)
-            || !get_driver_tag_by_idx(base_op_ref, stag, 0, false)) {
-        return false;
-    }
-    assert(!stag.empty() && !dtag.empty());
-    tag = {{std::move(stag), std::move(dtag)}};
-    return true;
-}
-
-::gnorm::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
-    ::gnorm::settings_t op_setting;
-    DNN_GRAPH_CHECK_SETTINGS(get_gnorm_desc(base_op_ref, op_setting.desc), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            gnorm::get_gnorm_dir(base_op_ref, op_setting.dir.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            gnorm::get_gnorm_dt(base_op_ref, op_setting.dt.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            gnorm::get_gnorm_stag_and_dtag(base_op_ref, op_setting.tag), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            gnorm::get_gnorm_flags(base_op_ref, op_setting.flags.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
-    return op_setting;
-}
-
-} // namespace gnorm
 
 namespace lnorm {
 
@@ -1161,8 +1106,13 @@ bool get_lnorm_dir(const deserialized_op &base_op_ref, dir_t &dir) {
     return true;
 }
 
-bool get_lnorm_dt(const deserialized_op &base_op_ref, dnnl_data_type_t &dt) {
-    dt = convert_dt(base_op_ref.in_lts_.front().get_data_type());
+bool get_lnorm_dt(const deserialized_op &base_op_ref, dnnl_data_type_t &dt,
+        const std::unordered_set<size_t> &rewrite_lt_ids) {
+    const auto &in_dt = base_op_ref.in_lts_.front().get_data_type();
+    dt = convert_dt(in_dt);
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_.front().id_)
+            != rewrite_lt_ids.end())
+        dt = dnnl_f32;
     return true;
 }
 
@@ -1209,21 +1159,20 @@ bool get_lnorm_flags(
     return true;
 }
 
-::lnorm::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
+::lnorm::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::lnorm::settings_t op_setting;
     DNN_GRAPH_CHECK_SETTINGS(
             get_prb_dims(base_op_ref, op_setting.prb_dims), res);
     DNN_GRAPH_CHECK_SETTINGS(
             lnorm::get_lnorm_dir(base_op_ref, op_setting.dir.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            lnorm::get_lnorm_dt(base_op_ref, op_setting.dt[0].front()), res);
+    DNN_GRAPH_CHECK_SETTINGS(lnorm::get_lnorm_dt(base_op_ref,
+                                     op_setting.dt[0].front(), rewrite_lt_ids),
+            res);
     DNN_GRAPH_CHECK_SETTINGS(
             get_driver_tag(base_op_ref, op_setting.tag[0].front()), res);
     DNN_GRAPH_CHECK_SETTINGS(
             lnorm::get_lnorm_flags(base_op_ref, op_setting.flags.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
 
     return op_setting;
 }
@@ -1267,12 +1216,23 @@ bool get_matmul_prb_vdims(
     return true;
 }
 
-bool get_matmul_dt(
-        const deserialized_op &base_op_ref, std::vector<dnnl_data_type_t> &dt) {
-    auto src_dt = convert_dt(base_op_ref.in_lts_[0].get_data_type());
-    auto wei_dt = convert_dt(base_op_ref.in_lts_[1].get_data_type());
-    auto dst_dt = convert_dt(base_op_ref.out_lts_[0].get_data_type());
-    dt = {src_dt, wei_dt, dst_dt};
+bool get_matmul_dt(const deserialized_op &base_op_ref,
+        std::vector<dnnl_data_type_t> &dt,
+        const std::unordered_set<size_t> &rewrite_lt_ids) {
+    auto src_dt = base_op_ref.in_lts_[0].data_type_;
+    auto wei_dt = base_op_ref.in_lts_[1].data_type_;
+    auto dst_dt = base_op_ref.out_lts_[0].data_type_;
+
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_[0].id_) != rewrite_lt_ids.end())
+        src_dt = "f32";
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_[1].id_) != rewrite_lt_ids.end())
+        wei_dt = "f32";
+    if (rewrite_lt_ids.find(base_op_ref.out_lts_[0].id_)
+            != rewrite_lt_ids.end())
+        dst_dt = "f32";
+
+    dt = {convert_dt(get_data_type(src_dt)), convert_dt(get_data_type(wei_dt)),
+            convert_dt(get_data_type(dst_dt))};
 
     return true;
 }
@@ -1325,14 +1285,15 @@ bool get_matmul_bia_dt_mask(const deserialized_op &base_op_ref,
     return true;
 }
 
-::matmul::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
+::matmul::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::matmul::settings_t op_setting;
     DNN_GRAPH_CHECK_SETTINGS(
             matmul::get_matmul_prb_vdims(base_op_ref, op_setting.prb_vdims),
             res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            matmul::get_matmul_dt(base_op_ref, op_setting.dt.front()), res);
+    DNN_GRAPH_CHECK_SETTINGS(matmul::get_matmul_dt(base_op_ref,
+                                     op_setting.dt.front(), rewrite_lt_ids),
+            res);
     DNN_GRAPH_CHECK_SETTINGS(
             matmul::get_matmul_bia_dt_mask(base_op_ref,
                     op_setting.bia_dt.front(), op_setting.dt.front()[0],
@@ -1343,8 +1304,6 @@ bool get_matmul_bia_dt_mask(const deserialized_op &base_op_ref,
                     op_setting.wtag.front(), op_setting.dtag.front(),
                     op_setting.prb_vdims.ndims),
             res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
 
     return op_setting;
 }
@@ -1433,11 +1392,19 @@ bool get_pool_dir(const deserialized_op &base_op_ref, dir_t &dir) {
     return ret;
 }
 
-bool get_pool_dt(
-        const deserialized_op &base_op_ref, std::vector<dnnl_data_type_t> &dt) {
-    auto src_dt = convert_dt(base_op_ref.in_lts_[0].get_data_type());
-    auto dst_dt = convert_dt(base_op_ref.out_lts_[0].get_data_type());
-    dt = {src_dt, dst_dt};
+bool get_pool_dt(const deserialized_op &base_op_ref,
+        std::vector<dnnl_data_type_t> &dt,
+        const std::unordered_set<size_t> &rewrite_lt_ids) {
+    auto src_dt = base_op_ref.in_lts_[0].data_type_;
+    auto dst_dt = base_op_ref.out_lts_[0].data_type_;
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_[0].id_) != rewrite_lt_ids.end())
+        src_dt = "f32";
+    if (rewrite_lt_ids.find(base_op_ref.out_lts_[0].id_)
+            != rewrite_lt_ids.end())
+        dst_dt = "f32";
+
+    dt = {convert_dt(get_data_type(src_dt)), convert_dt(get_data_type(dst_dt))};
+
     return true;
 }
 
@@ -1468,7 +1435,8 @@ bool get_pool_alg(const deserialized_op &base_op_ref, ::pool::alg_t &alg) {
     return true;
 }
 
-::pool::settings_t get_setting(const deserialized_op &base_op_ref, res_t *res) {
+::pool::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::pool::settings_t op_setting;
     DNN_GRAPH_CHECK_SETTINGS(
             pool::get_pool_desc(base_op_ref, op_setting.desc), res);
@@ -1476,8 +1444,9 @@ bool get_pool_alg(const deserialized_op &base_op_ref, ::pool::alg_t &alg) {
             pool::get_pool_alg(base_op_ref, op_setting.alg.front()), res);
     DNN_GRAPH_CHECK_SETTINGS(
             pool::get_pool_dir(base_op_ref, op_setting.dir.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            pool::get_pool_dt(base_op_ref, op_setting.dt.front()), res);
+    DNN_GRAPH_CHECK_SETTINGS(pool::get_pool_dt(base_op_ref,
+                                     op_setting.dt.front(), rewrite_lt_ids),
+            res);
     DNN_GRAPH_CHECK_SETTINGS(
             get_driver_tag(base_op_ref, op_setting.tag.front()), res);
 
@@ -1537,36 +1506,39 @@ bool get_prelu_dir(const deserialized_op &base_op_ref, dir_t &dir) {
     return ret;
 }
 
-bool get_prelu_sdt(
-        const deserialized_op &base_op_ref, std::vector<dnnl_data_type_t> &dt) {
-    const auto &_dt = convert_dt(base_op_ref.in_lts_.front().get_data_type());
-    dt = {_dt, _dt};
+bool get_prelu_sdt(const deserialized_op &base_op_ref,
+        std::vector<dnnl_data_type_t> &dt,
+        const std::unordered_set<size_t> &rewrite_lt_ids) {
+    const auto &in_dt = base_op_ref.in_lts_.front().get_data_type();
+    auto sdt = convert_dt(in_dt);
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_.front().id_)
+            != rewrite_lt_ids.end())
+        sdt = dnnl_f32;
+    dt = {sdt, sdt};
     return true;
 }
 
 bool get_prelu_stag(
         const deserialized_op &base_op_ref, ::prelu::settings_t &op_setting) {
     std::string tag0, tag1;
-    if (!get_driver_tag_by_idx(base_op_ref, tag0)
-            || !get_driver_tag_by_idx(base_op_ref, tag1, 1))
-        return false;
+    get_driver_tag_by_idx(base_op_ref, tag0);
+    get_driver_tag_by_idx(base_op_ref, tag1, 1);
     op_setting.stag = {{tag0, tag1}};
     return true;
 }
 
-::prelu::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
+::prelu::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::prelu::settings_t op_setting;
     DNN_GRAPH_CHECK_SETTINGS(
             prelu::get_prelu_prb_vdims(base_op_ref, op_setting.prb_vdims), res);
     DNN_GRAPH_CHECK_SETTINGS(
             prelu::get_prelu_dir(base_op_ref, op_setting.dir.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            prelu::get_prelu_sdt(base_op_ref, op_setting.sdt.front()), res);
+    DNN_GRAPH_CHECK_SETTINGS(prelu::get_prelu_sdt(base_op_ref,
+                                     op_setting.sdt.front(), rewrite_lt_ids),
+            res);
     DNN_GRAPH_CHECK_SETTINGS(
             prelu::get_prelu_stag(base_op_ref, op_setting), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
 
     return op_setting;
 }
@@ -1607,9 +1579,20 @@ bool get_reduction_prb_vdims(
 }
 
 bool get_reduction_dt(const deserialized_op &base_op_ref, dnnl_data_type_t &sdt,
-        dnnl_data_type_t &ddt) {
-    sdt = convert_dt(base_op_ref.in_lts_.front().get_data_type());
-    ddt = convert_dt(base_op_ref.out_lts_.front().get_data_type());
+        dnnl_data_type_t &ddt,
+        const std::unordered_set<size_t> &rewrite_lt_ids) {
+
+    auto sdt_ = convert_dt(base_op_ref.in_lts_.front().get_data_type());
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_.front().id_)
+            != rewrite_lt_ids.end())
+        sdt_ = dnnl_f32;
+    sdt = sdt_;
+
+    auto ddt_ = convert_dt(base_op_ref.out_lts_.front().get_data_type());
+    if (rewrite_lt_ids.find(base_op_ref.out_lts_.front().id_)
+            != rewrite_lt_ids.end())
+        ddt_ = dnnl_f32;
+    ddt = ddt_;
     return true;
 }
 
@@ -1634,15 +1617,15 @@ bool get_reduction_p(const deserialized_op &base_op_ref, float &p) {
     return true;
 }
 
-::reduction::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
+::reduction::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::reduction::settings_t op_setting;
     DNN_GRAPH_CHECK_SETTINGS(reduction::get_reduction_prb_vdims(
                                      base_op_ref, op_setting.prb_vdims),
             res);
     DNN_GRAPH_CHECK_SETTINGS(
             reduction::get_reduction_dt(base_op_ref, op_setting.sdt.front(),
-                    op_setting.ddt.front()),
+                    op_setting.ddt.front(), rewrite_lt_ids),
             res);
     DNN_GRAPH_CHECK_SETTINGS(
             get_driver_stag_and_dtag(base_op_ref, op_setting.stag.front(),
@@ -1653,8 +1636,6 @@ bool get_reduction_p(const deserialized_op &base_op_ref, float &p) {
             res);
     DNN_GRAPH_CHECK_SETTINGS(
             reduction::get_reduction_p(base_op_ref, op_setting.p.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
 
     return op_setting;
 }
@@ -1664,9 +1645,18 @@ bool get_reduction_p(const deserialized_op &base_op_ref, float &p) {
 namespace reorder {
 
 bool get_reorder_dt(const deserialized_op &base_op_ref, dnnl_data_type_t &sdt,
-        dnnl_data_type_t &ddt) {
+        dnnl_data_type_t &ddt,
+        const std::unordered_set<size_t> &rewrite_lt_ids) {
     sdt = convert_dt(base_op_ref.in_lts_.front().get_data_type());
     ddt = convert_dt(base_op_ref.out_lts_.front().get_data_type());
+
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_.front().id_)
+            != rewrite_lt_ids.end())
+        sdt = dnnl_f32;
+    if (rewrite_lt_ids.find(base_op_ref.out_lts_.front().id_)
+            != rewrite_lt_ids.end())
+        ddt = dnnl_f32;
+
     return true;
 }
 
@@ -1742,8 +1732,8 @@ bool get_reorder_attrs(const deserialized_op &base_op_ref,
     return true;
 }
 
-::reorder::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
+::reorder::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::reorder::settings_t op_setting;
     const auto op_kind = base_op_ref.kind_;
 
@@ -1752,7 +1742,7 @@ bool get_reorder_attrs(const deserialized_op &base_op_ref,
 
     DNN_GRAPH_CHECK_SETTINGS(
             reorder::get_reorder_dt(base_op_ref, op_setting.sdt.front(),
-                    op_setting.ddt.front()),
+                    op_setting.ddt.front(), rewrite_lt_ids),
             res);
     DNN_GRAPH_CHECK_SETTINGS(
             reorder::get_reorder_stag_and_dtag(base_op_ref,
@@ -1766,9 +1756,6 @@ bool get_reorder_attrs(const deserialized_op &base_op_ref,
                                          op_setting.zero_points.front()),
                 res);
     }
-
-    DNN_GRAPH_CHECK_SETTINGS(
-            get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
     return op_setting;
 }
 
@@ -1817,9 +1804,22 @@ bool get_resampling_dir(const deserialized_op &base_op_ref, dir_t &dir) {
 }
 
 bool get_resampling_dt(const deserialized_op &base_op_ref,
-        dnnl_data_type_t &sdt, dnnl_data_type_t &ddt) {
-    sdt = convert_dt(base_op_ref.in_lts_.front().get_data_type());
-    ddt = convert_dt(base_op_ref.out_lts_.front().get_data_type());
+        dnnl_data_type_t &sdt, dnnl_data_type_t &ddt,
+        const std::unordered_set<size_t> &rewrite_lt_ids) {
+
+    const auto &inputs = base_op_ref.in_lts_;
+    auto sdt_ = convert_dt(inputs.front().get_data_type());
+    auto ddt_ = convert_dt(base_op_ref.out_lts_.front().get_data_type());
+
+    // bf16-to-f32 rewrite
+    if (rewrite_lt_ids.find(inputs.front().id_) != rewrite_lt_ids.end())
+        sdt_ = dnnl_f32;
+    if (rewrite_lt_ids.find(base_op_ref.out_lts_.front().id_)
+            != rewrite_lt_ids.end())
+        ddt_ = dnnl_f32;
+
+    sdt = sdt_;
+    ddt = ddt_;
     return true;
 }
 
@@ -1839,8 +1839,8 @@ bool get_resampling_alg(
     return true;
 }
 
-::resampling::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
+::resampling::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::resampling::settings_t op_setting;
     DNN_GRAPH_CHECK_SETTINGS(
             resampling::get_resampling_desc(base_op_ref, op_setting.desc), res);
@@ -1849,7 +1849,7 @@ bool get_resampling_alg(
             res);
     DNN_GRAPH_CHECK_SETTINGS(
             resampling::get_resampling_dt(base_op_ref, op_setting.sdt.front(),
-                    op_setting.ddt.front()),
+                    op_setting.ddt.front(), rewrite_lt_ids),
             res);
     DNN_GRAPH_CHECK_SETTINGS(
             get_driver_tag(base_op_ref, op_setting.tag.front()), res);
@@ -1878,9 +1878,14 @@ bool get_softmax_dir(const deserialized_op &base_op_ref, dir_t &dir) {
     return true;
 };
 
-bool get_softmax_sdt_and_ddt(
-        const deserialized_op &base_op_ref, ::softmax::settings_t &op_setting) {
-    const auto &dt = convert_dt(base_op_ref.in_lts_.front().get_data_type());
+bool get_softmax_sdt_and_ddt(const deserialized_op &base_op_ref,
+        ::softmax::settings_t &op_setting,
+        const std::unordered_set<size_t> &rewrite_lt_ids) {
+    const auto &in_dt = base_op_ref.in_lts_.front().get_data_type();
+    dnnl_data_type_t dt = convert_dt(in_dt);
+    if (rewrite_lt_ids.find(base_op_ref.in_lts_.front().id_)
+            != rewrite_lt_ids.end())
+        dt = dnnl_f32;
     op_setting.sdt.front() = dt;
     op_setting.ddt.front() = dt;
     return true;
@@ -1900,15 +1905,16 @@ bool get_softmax_alg(
     return true;
 };
 
-::softmax::settings_t get_setting(
-        const deserialized_op &base_op_ref, res_t *res) {
+::softmax::settings_t get_setting(const deserialized_op &base_op_ref,
+        const std::unordered_set<size_t> &rewrite_lt_ids, res_t *res) {
     ::softmax::settings_t op_setting;
     DNN_GRAPH_CHECK_SETTINGS(
             get_prb_dims(base_op_ref, op_setting.prb_dims), res);
     DNN_GRAPH_CHECK_SETTINGS(
             softmax::get_softmax_dir(base_op_ref, op_setting.dir.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            softmax::get_softmax_sdt_and_ddt(base_op_ref, op_setting), res);
+    DNN_GRAPH_CHECK_SETTINGS(softmax::get_softmax_sdt_and_ddt(
+                                     base_op_ref, op_setting, rewrite_lt_ids),
+            res);
     DNN_GRAPH_CHECK_SETTINGS(
             get_driver_stag_and_dtag(base_op_ref, op_setting.stag.front(),
                     op_setting.dtag.front()),
@@ -1917,9 +1923,6 @@ bool get_softmax_alg(
             softmax::get_softmax_alg(base_op_ref, op_setting.alg.front()), res);
     DNN_GRAPH_CHECK_SETTINGS(
             get_driver_axis(base_op_ref, op_setting.axis.front()), res);
-    DNN_GRAPH_CHECK_SETTINGS(
-            get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
-
     return op_setting;
 }
 

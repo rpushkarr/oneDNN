@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2024 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -61,7 +61,7 @@ void parse_key_value(std::vector<std::map<size_t, std::string>> &res_v,
             if (key_val_case.count(key_num) || single_key_val.empty()) {
                 fprintf(stderr, "graph: Parser: repeat id `%zd`, exiting...\n",
                         key_num);
-                SAFE_V(FAIL);
+                exit(2);
             }
             key_val_case.emplace(stoll(key_str), val_str);
         }
@@ -83,53 +83,6 @@ bool parse_op_attrs(std::vector<std::map<size_t, std::string>> &op_attrs_vec,
     std::string op_attrs_str;
     if (!parse_string(op_attrs_str, str, "op-attrs")) return false;
     return parse_key_value(op_attrs_vec, op_attrs_str), true;
-}
-
-bool parse_graph_expected_n_partitions(
-        std::vector<size_t> &expected_n_partition_vec, const char *str) {
-    std::string expected_n_partitions_str;
-    if (!parse_string(expected_n_partitions_str, str, "expected-n-partitions"))
-        return false;
-
-    std::stringstream ss(expected_n_partitions_str);
-    std::string expected_n_partitions;
-    while (std::getline(ss, expected_n_partitions, ',')) {
-        if (!expected_n_partitions.empty()) {
-            expected_n_partition_vec.clear();
-
-            const auto int_expected_n_partitions
-                    = std::stoi(expected_n_partitions);
-            if (int_expected_n_partitions >= 0) {
-                expected_n_partition_vec.emplace_back(
-                        int_expected_n_partitions);
-            } else {
-                BENCHDNN_PRINT(0,
-                        "Error: expected-n-partitions option supports only"
-                        "non-negative numbers, but `%d` was specified.\n",
-                        int_expected_n_partitions);
-                SAFE_V(FAIL);
-            }
-        }
-    }
-    return true;
-}
-
-bool parse_graph_fpmath_mode(
-        std::vector<std::string> &fpmath_mode_vec, const char *str) {
-    std::string graph_attrs_str;
-    if (!parse_string(graph_attrs_str, str, "attr-fpmath")) return false;
-
-    std::stringstream ss(graph_attrs_str);
-    std::string mode;
-    while (std::getline(ss, mode, ',')) {
-        if (!mode.empty()) {
-            if (fpmath_mode_vec.size() == 1
-                    && fpmath_mode_vec.front() == "default")
-                fpmath_mode_vec.pop_back();
-            fpmath_mode_vec.emplace_back(mode);
-        }
-    }
-    return true;
 }
 
 std::map<std::string, std::string> parse_attrs(const std::string &attrs_str) {
@@ -171,7 +124,7 @@ std::vector<float> string_to_f32_vec(const std::string &val_str) {
             fprintf(stderr,
                     "graph: Parser: invalid attr value `%s`, exiting...\n",
                     val_str.c_str());
-            SAFE_V(FAIL);
+            exit(2);
         }
     }
     return f32_vec;
@@ -190,7 +143,7 @@ dims_t string_to_shape(const std::string &shape_str) {
             fprintf(stderr,
                     "graph: Parser: invalid shape value `%s`, exiting...\n",
                     shape_str.c_str());
-            SAFE_V(FAIL);
+            exit(2);
         }
     }
     return shape;

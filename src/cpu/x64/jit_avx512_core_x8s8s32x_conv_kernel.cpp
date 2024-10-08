@@ -56,7 +56,7 @@ template <typename Vmm>
 _jit_avx512_core_x8s8s32x_fwd_kernel<Vmm>::_jit_avx512_core_x8s8s32x_fwd_kernel(
         const jit_conv_conf_t &ajcp, const primitive_attr_t &attr,
         const memory_desc_t &dst_md)
-    : jit_generator(jit_name(), ajcp.isa)
+    : jit_generator(jit_name())
     , jcp(ajcp)
     , attr_(attr)
     , postops_injector_(nullptr) {
@@ -351,7 +351,8 @@ void _jit_avx512_core_x8s8s32x_fwd_kernel<Vmm>::store_output(
         for (int k = 0; k < nb_oc_block; k++) {
             for (int j = 0; j < ur_w; j++) {
                 Vmm vmm = vmm_out(j, k);
-                saturate_cvt_f32(vmm, vmm_zero, vmm_saturation, jcp.dst_dt);
+                saturate_f32(vmm, vmm_zero, vmm_saturation, jcp.dst_dt);
+                vcvtps2dq(vmm, vmm);
             }
         }
     }
@@ -1344,8 +1345,7 @@ void _jit_avx512_core_x8s8s32x_fwd_kernel<Vmm>::generate() {
 
     postamble();
 
-    if (jcp.with_eltwise)
-        postops_injector_->prepare_table(/* generate = */ true);
+    if (jcp.with_eltwise) postops_injector_->prepare_table();
 
     if (jcp.is_fast_depthwise) {
         align(64);
@@ -1429,16 +1429,8 @@ status_t jit_avx512_core_x8s8s32x_fwd_kernel::init_conf(jit_conv_conf_t &jcp,
     jcp.is_depthwise = true && with_groups && everyone_is(1, jcp.ic, jcp.oc);
 
     // Used for bfloat16 output
-    jcp.isa = mayiuse(avx512_core_vnni) ? avx512_core_vnni : avx512_core;
-    if (dst_d.data_type() == bf16) {
-        if (mayiuse(avx512_core_bf16)) {
-            jcp.isa = avx512_core_bf16;
-        } else {
-            const auto bf16_emulation_isa = bf16_emulation_t::get_isa();
-            if (!is_superset(jcp.isa, bf16_emulation_isa))
-                return status::unimplemented;
-        }
-    }
+    jcp.isa = mayiuse(avx512_core_bf16) ? avx512_core_bf16
+                                        : bf16_emulation_t::get_isa();
 
     if (jcp.is_depthwise && is_3d)
         // NOTE: 3D depthwise is not currently supported here.

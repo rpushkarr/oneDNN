@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2024 Intel Corporation
+* Copyright 2016-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -22,12 +22,8 @@
 #include "c_types_map.hpp"
 #include "nstl.hpp"
 #include "utils.hpp"
-#include "verbose.hpp"
 
 #include "type_helpers.hpp"
-
-#define VCHECK_MEMORY(cond, stat, msg, ...) \
-    VCONDCHECK(common, create, check, memory, (cond), stat, msg, ##__VA_ARGS__)
 
 namespace dnnl {
 namespace impl {
@@ -67,9 +63,6 @@ struct memory_desc_wrapper : public c_compatible {
     bool is_rnn_packed_desc() const {
         return format_kind() == format_kind::rnn_packed;
     }
-    bool is_cublaslt_blocked_desc() const {
-        return format_kind() == format_kind::cublaslt_blocked;
-    }
     bool is_sparse_desc() const { return format_kind() == format_kind::sparse; }
 
     const blocking_desc_t &blocking_desc() const {
@@ -84,10 +77,6 @@ struct memory_desc_wrapper : public c_compatible {
     const rnn_packed_desc_t &rnn_packed_desc() const {
         assert(is_rnn_packed_desc());
         return md_->format_desc.rnn_packed_desc;
-    }
-    const cublaslt_blocked_desc_t &cublaslt_blocked_desc() const {
-        assert(is_cublaslt_blocked_desc());
-        return md_->format_desc.cublaslt_blocked_desc;
     }
 
     const sparse_desc_t &sparse_desc() const {
@@ -137,13 +126,6 @@ struct memory_desc_wrapper : public c_compatible {
 
     /** return the size of data type (a shortcut) */
     size_t data_type_size() const { return types::data_type_size(data_type()); }
-
-    /** For sub-byte data types returns number of elements per byte.
-     * For the rest data types returns 1. */
-    size_t sub_byte_data_type_multiplier() const {
-        if (utils::one_of(data_type(), data_type::s4, data_type::u4)) return 2;
-        return 1;
-    }
 
     /** return the size of data type of additional buffer */
     size_t additional_buffer_data_size(uint64_t flag_select) const {
@@ -205,7 +187,7 @@ struct memory_desc_wrapper : public c_compatible {
         return 0;
     }
 
-    dim_t blk_size() const {
+    int blk_size() const {
         assert(is_blocking_desc() || is_sparse_packed_desc());
         const auto &bd = blocking_desc();
         return utils::array_product(bd.inner_blks, bd.inner_nblks);
@@ -231,8 +213,7 @@ struct memory_desc_wrapper : public c_compatible {
             return 0;
 
         if (utils::one_of(format_kind(), format_kind::blocked,
-                    format_kind::wino, format_kind::rnn_packed,
-                    format_kind::cublaslt_blocked)
+                    format_kind::wino, format_kind::rnn_packed)
                 && index != 0) {
             return 0;
         }
@@ -243,8 +224,6 @@ struct memory_desc_wrapper : public c_compatible {
             return wino_desc().size;
         } else if (is_rnn_packed_desc()) {
             return rnn_packed_desc().size;
-        } else if (is_cublaslt_blocked_desc()) {
-            return cublaslt_blocked_desc().size;
         } else if (is_blocking_desc()) {
             if (offset0() != 0) return 0;
 
@@ -262,11 +241,10 @@ struct memory_desc_wrapper : public c_compatible {
             }
 
             if (max_size == 1 && bd.inner_nblks != 0) {
-                max_size = static_cast<size_t>(blk_size());
+                max_size = utils::array_product(bd.inner_blks, bd.inner_nblks);
             }
 
-            size_t data_size = max_size * data_type_size()
-                    / sub_byte_data_type_multiplier();
+            size_t data_size = max_size * data_type_size();
             if (is_additional_buffer()) {
                 // The additional buffers, typically of data type int32_t, float
                 // are stored at the end of data. Pad the data, so that the
@@ -292,18 +270,6 @@ struct memory_desc_wrapper : public c_compatible {
                         return (dims()[0] + 1) * types::data_type_size(ptr_dt);
                     }
                     default: assert(!"unknown index"); return 0;
-                }
-            } else if (sparse_desc().encoding == sparse_encoding::coo) {
-                // Return size for values.
-                if (index == 0) {
-                    return nnz() * data_type_size();
-                } else if (index > 0 && index <= ndims()) {
-                    // Return size for index buffers.
-                    const auto idx_dt = metadata_type(0);
-                    return nnz() * types::data_type_size(idx_dt);
-                } else {
-                    assert(!"unknown index");
-                    return 0;
                 }
             } else if (sparse_desc().encoding == sparse_encoding::packed) {
                 // If the size if queried from a user-created memory descriptor.
@@ -356,7 +322,6 @@ struct memory_desc_wrapper : public c_compatible {
             return false;
         if (has_runtime_dims_or_strides() || has_broadcast()) return false;
         return nelems(with_padding) * data_type_size()
-                / sub_byte_data_type_multiplier()
                 == size(0, /* include_additional_size = */ false);
     }
 
@@ -511,7 +476,6 @@ struct memory_desc_wrapper : public c_compatible {
      * a scalar \param l_offset. if \param is_pos_padded is true, \param
      * l_offset represents logical offset in already padded area */
     dim_t off_l(dim_t l_offset, bool is_pos_padded = false) const {
-        if (l_offset == 0) return offset0();
         dims_t dims_pos;
         const auto &cur_dims = is_pos_padded ? padded_dims() : dims();
         utils::l_dims_by_l_offset(dims_pos, l_offset, cur_dims, ndims());
@@ -591,8 +555,7 @@ inline bool memory_desc_wrapper::similar_to(const memory_desc_wrapper &rhs,
 
     if (one_of(format_kind(), format_kind::undef, format_kind::any))
         return false;
-    if (is_wino_desc() || is_rnn_packed_desc() || is_cublaslt_blocked_desc())
-        return false;
+    if (is_wino_desc() || is_rnn_packed_desc()) return false;
 
     const int ds = dim_start;
     const auto &blk = blocking_desc();

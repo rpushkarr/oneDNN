@@ -70,15 +70,14 @@ int fill_dst(const prb_t *prb, dnn_mem_t &mem_dt, dnn_mem_t &mem_fp) {
 dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
     const prb_t *prb = init_pd_args.prb;
     res_t *res = init_pd_args.res;
-    bool force_f32_dt = init_pd_args.force_f32_dt;
 
     std::string src_tag = (prb->dir & FLAG_FWD) ? prb->tag : tag::any;
     std::string dst_tag = (prb->dir & FLAG_BWD) ? prb->tag : tag::any;
 
-    auto src_d = dnn_mem_t::init_md(prb->ndims, prb->src_dims().data(),
-            force_f32_dt ? dnnl_f32 : prb->sdt, src_tag);
-    auto dst_d = dnn_mem_t::init_md(prb->ndims, prb->dst_dims().data(),
-            force_f32_dt ? dnnl_f32 : prb->ddt, dst_tag);
+    auto src_d = dnn_mem_t::init_md(
+            prb->ndims, prb->src_dims().data(), prb->sdt, src_tag);
+    auto dst_d = dnn_mem_t::init_md(
+            prb->ndims, prb->dst_dims().data(), prb->ddt, dst_tag);
 
     dnnl_alg_kind_t alg = alg2alg_kind(prb->alg);
 
@@ -123,10 +122,7 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
     if (is_nvidia_gpu()) {
         // cuDNN precision is different from ref one due to different
         // computation algorithm used for resampling.
-        trh = (prb->ddt == dnnl_f16 || prb->sdt == dnnl_bf16
-                      || prb->sdt == dnnl_f16 || prb->ddt == dnnl_bf16)
-                ? 4e-2
-                : 2e-5;
+        trh = (prb->ddt == dnnl_f16 || prb->sdt == dnnl_bf16) ? 4e-2 : 2e-5;
     }
     cmp.set_threshold(trh);
 
@@ -167,7 +163,7 @@ fill_cfg_t binary_po_fill_cfg(
 }
 
 int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
-        dnnl_primitive_t prim, const prb_t *prb, res_t *res,
+        dnnl_primitive_t prim, const prb_t *prb, res_t *res, dir_t dir,
         dnnl_primitive_t prim_ref) {
     if (has_bench_mode_modifier(mode_modifier_t::no_host_memory)) return OK;
 
@@ -257,8 +253,9 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     dnn_mem_map_t mem_map, ref_mem_map;
     init_memory_args<prb_t>(mem_map, prb, prim, supported_exec_args(prb->dir));
-    TIME_FILL(SAFE(
-            init_ref_memory_args(ref_mem_map, mem_map, prim, prb, res), WARN));
+    TIME_FILL(SAFE(init_ref_memory_args(
+                           ref_mem_map, mem_map, prim, prb, res, prb->dir),
+            WARN));
 
     args_t args(mem_map), ref_args(ref_mem_map);
 
@@ -266,8 +263,7 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     check_correctness(
             prb, get_kinds_to_check(prb), args, ref_args, setup_cmp, res);
-    SAFE(check_bitwise(prim, get_kinds_to_check(prb), args, prb->attr,
-                 prb->inplace, res),
+    SAFE(check_bitwise(prim, get_kinds_to_check(prb), args, prb->inplace, res),
             WARN);
 
     return measure_perf(prb->ctx_exe, res, prim, args);

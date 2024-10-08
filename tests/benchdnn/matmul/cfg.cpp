@@ -63,11 +63,9 @@ float cfg_t::get_density(const cfg_t::density_args_t &density_args) const {
 
 cfg_t::cfg_entry_t::cfg_map_t cfg_t::get_cfg_map(data_kind_t kind) const {
     static const cfg_t::cfg_entry_t::cfg_map_t src_cfg_map = {
-            {{dnnl_f64}, {-64, 64}},
             {{dnnl_f32}, {-64, 64}},
             {{dnnl_bf16}, {-4, 4}},
             {{dnnl_f16}, {-4, 4}},
-            {{dnnl_f4_e2m1}, {0, 1}},
             {{dnnl_f8_e5m2}, {-4, 4}},
             {{dnnl_f8_e4m3}, {-4, 4}},
             {{dnnl_s8}, {-4, 4}},
@@ -75,25 +73,19 @@ cfg_t::cfg_entry_t::cfg_map_t cfg_t::get_cfg_map(data_kind_t kind) const {
     };
 
     static const cfg_t::cfg_entry_t::cfg_map_t wei_cfg_map = {
-            {{dnnl_f64}, {-128, 128}},
             {{dnnl_f32}, {-128, 128}},
             {{dnnl_bf16}, {-8, 8}},
             {{dnnl_f16}, {-2, 2}},
-            {{dnnl_f4_e2m1}, {-1, 1}},
             {{dnnl_f8_e5m2}, {-2, 2}},
             {{dnnl_f8_e4m3}, {-2, 2}},
             {{dnnl_s8}, {-4, 4}},
-            {{dnnl_u8}, {0, 8}},
-            {{dnnl_s4}, {-8, 7}},
-            {{dnnl_u4}, {0, 15}},
+            {{dnnl_u8}, {0, 4}},
     };
 
     static const cfg_t::cfg_entry_t::cfg_map_t bia_cfg_map = {
-            {{dnnl_f64}, {-8, 8}},
             {{dnnl_f32}, {-8, 8}},
             {{dnnl_bf16}, {-8, 8}},
             {{dnnl_f16}, {-8, 8}},
-            {{dnnl_f4_e2m1}, {-2, 2}},
             {{dnnl_f8_e5m2}, {-8, 8}},
             {{dnnl_f8_e4m3}, {-8, 8}},
             {{dnnl_s8}, {-8, 8}},
@@ -107,11 +99,9 @@ cfg_t::cfg_entry_t::cfg_map_t cfg_t::get_cfg_map(data_kind_t kind) const {
     };
 
     static const cfg_t::cfg_entry_t::cfg_map_t dst_cfg_map = {
-            {{dnnl_f64}, {-8, 8}},
             {{dnnl_f32}, {-8, 8}},
             {{dnnl_bf16}, {-8, 8}},
             {{dnnl_f16}, {-4, 4}},
-            {{dnnl_f4_e2m1}, {-2, 2}},
             {{dnnl_f8_e5m2}, {-4, 4}},
             {{dnnl_f8_e4m3}, {-4, 4}},
             {{dnnl_s8}, {-4, 4}},

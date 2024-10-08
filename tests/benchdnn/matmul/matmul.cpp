@@ -62,16 +62,12 @@ benchdnn_dnnl_wrapper_t<dnnl_memory_desc_t> create_md(const prb_t *prb,
                     return dnn_mem_t::init_csr_md(prb->ndims,
                             src_rt_dims.data(), dt, nnz, dnnl_s32, dnnl_s32);
                     break;
-                case dnnl_coo:
-                    return dnn_mem_t::init_coo_md(
-                            prb->ndims, src_rt_dims.data(), dt, nnz, dnnl_s32);
-                    break;
                 default: assert(!"unsupported encoding"); return nullptr;
             }
         } else
 #endif
-            return dnn_mem_t::init_md(prb->ndims, src_rt_dims.data(), dt,
-                    prb->stag, prb->strides[STRIDES_SRC]);
+            return dnn_mem_t::init_md(prb->ndims, src_rt_dims.data(),
+                    prb->src_dt(), prb->stag, prb->strides[STRIDES_SRC]);
     }
 
     if (kind == WEI) {
@@ -90,9 +86,6 @@ benchdnn_dnnl_wrapper_t<dnnl_memory_desc_t> create_md(const prb_t *prb,
                     return dnn_mem_t::init_csr_md(prb->ndims,
                             weights_rt_dims.data(), dt, nnz, dnnl_s32,
                             dnnl_s32);
-                case dnnl_coo:
-                    return dnn_mem_t::init_coo_md(prb->ndims,
-                            weights_rt_dims.data(), dt, nnz, dnnl_s32);
                 case dnnl_packed:
                     return dnn_mem_t::init_sparse_packed_md(
                             prb->ndims, weights_rt_dims.data(), dt, nnz);
@@ -101,8 +94,8 @@ benchdnn_dnnl_wrapper_t<dnnl_memory_desc_t> create_md(const prb_t *prb,
             }
         } else
 #endif
-            return dnn_mem_t::init_md(prb->ndims, weights_rt_dims.data(), dt,
-                    prb->wtag, prb->strides[STRIDES_WEI]);
+            return dnn_mem_t::init_md(prb->ndims, weights_rt_dims.data(),
+                    prb->wei_dt(), prb->wtag, prb->strides[STRIDES_WEI]);
     }
 
     if (kind == DST) {
@@ -118,38 +111,22 @@ benchdnn_dnnl_wrapper_t<dnnl_memory_desc_t> create_md(const prb_t *prb,
 dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
     const prb_t *prb = init_pd_args.prb;
     res_t *res = init_pd_args.res;
-    bool force_f32_dt = init_pd_args.force_f32_dt;
 
-    auto src_d = create_md(
-            prb, SRC, force_f32_dt ? dnnl_f32 : dnnl_data_type_undef);
-    auto wei_d = create_md(
-            prb, WEI, force_f32_dt ? dnnl_f32 : dnnl_data_type_undef);
-    auto dst_d = create_md(
-            prb, DST, force_f32_dt ? dnnl_f32 : dnnl_data_type_undef);
+    auto src_d = create_md(prb, SRC);
+    auto wei_d = create_md(prb, WEI);
+    auto dst_d = create_md(prb, DST);
 
     benchdnn_dnnl_wrapper_t<dnnl_memory_desc_t> bia_d {};
     if (prb->bia_dt != dnnl_data_type_undef) {
         auto bia_dims = get_runtime_dims(
                 prb->bia_dims(), prb->bias_runtime_dim_mask());
-        bia_d = dnn_mem_t::init_md(prb->ndims, bia_dims.data(),
-                force_f32_dt ? dnnl_f32 : prb->bia_dt,
+        bia_d = dnn_mem_t::init_md(prb->ndims, bia_dims.data(), prb->bia_dt,
                 prb->dst_runtime_dim_mask() != 0 ? tag::abx : tag::any);
     }
 
     attr_args_t attr_args;
     attr_args.prepare_post_ops_mds(prb->attr, prb->ndims, prb->dst_dims.data());
-    // Overload PER_OC src_mask definition for batched case
-    auto src_scale = prb->attr.scales.get(DNNL_ARG_SRC);
-    if (src_scale.policy == policy_t::PER_OC
-            || src_scale.policy == policy_t::PER_OCIC) {
-        const auto &src_rt_dims = get_runtime_dims(
-                prb->src_dims(), prb->src_runtime_dim_mask());
-        int src_mask = 1 << (src_rt_dims.size() - 1);
-        if (src_scale.policy == policy_t::PER_OCIC)
-            src_mask += 1 << (src_rt_dims.size() - 2);
-        attr_args.prepare_scales(prb->attr, DNNL_ARG_SRC, src_mask);
-    }
-    // Overload PER_OC/PER_OCIC wei_mask definition for batched case
+    // Overload PER_OC wei_mask definition for batched case
     auto wei_scale = prb->attr.scales.get(DNNL_ARG_WEIGHTS);
     if (wei_scale.policy == policy_t::PER_OC
             || wei_scale.policy == policy_t::PER_OCIC) {
@@ -160,7 +137,7 @@ dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
             wei_mask += 1 << (dst_rt_dims.size() - 2);
         attr_args.prepare_scales(prb->attr, DNNL_ARG_WEIGHTS, wei_mask);
     }
-    // Overload PER_OC/PER_OCIC zp_mask definition for batched case
+    // Overload PER_OC wei_mask definition for batched case
     auto wei_zp = prb->attr.zero_points.get(DNNL_ARG_WEIGHTS);
     if (wei_zp.policy == policy_t::PER_OC
             || wei_zp.policy == policy_t::PER_OCIC) {
@@ -236,20 +213,17 @@ int init_prim_ref(benchdnn_dnnl_wrapper_t<dnnl_primitive_t> &prim_ref,
         fetch_impl(pdw, init_pd_args, /* res = */ nullptr,
                 /* is_service_prim = */ true);
 
-        // Prim desc wasn't created - try the next set...
-        if (!pdw) continue;
-        // Reference impl was fetched - try the next set...
-        if (query_impl_info(pdw) == "ref:any") continue;
+        if (pdw) {
+            if (query_impl_info(pdw) == "ref:any") return OK;
 
-        auto st = dnnl_primitive_create(&prim_ref_, pdw);
-        // Primitive wan't created - try the next set...
-        if (st != dnnl_success) continue;
+            auto st = dnnl_primitive_create(&prim_ref_, pdw);
+            if (st != dnnl_success) continue;
 
-        BENCHDNN_PRINT(5, "CPU reference oneDNN implementation: %s\n",
-                query_impl_info(pdw).c_str());
-        res->prim_ref_repro = prb_cpu.str();
-        prim_ref.reset(prim_ref_);
-        return OK;
+            BENCHDNN_PRINT(5, "CPU reference oneDNN implementation: %s\n",
+                    query_impl_info(pdw).c_str());
+            res->prim_ref_repro = prb_cpu.str();
+            break;
+        }
     }
 
     prim_ref.reset(prim_ref_);
@@ -260,8 +234,8 @@ int init_prim_ref(benchdnn_dnnl_wrapper_t<dnnl_primitive_t> &prim_ref,
 // The main idea is to generate values and metadata directly without generating
 // the dense matrix to avoid excessive memory consumption for large problem
 // sizes.
-int fill_sparse_data(data_kind_t kind, const prb_t *prb, dnn_mem_t &mem_dt,
-        dnn_mem_t &mem_fp, res_t *res, dnnl_sparse_encoding_t encoding) {
+int fill_csr_data(data_kind_t kind, const prb_t *prb, dnn_mem_t &mem_dt,
+        dnn_mem_t &mem_fp, res_t *res) {
     if (query_md_num_handles(mem_dt.md_) != 3) return FAIL;
 
     if (kind != SRC && kind != WEI) return FAIL;
@@ -307,36 +281,19 @@ int fill_sparse_data(data_kind_t kind, const prb_t *prb, dnn_mem_t &mem_dt,
 
     if (remaining_nnz_cnt != 0) return FAIL;
 
-    int values_idx = 0;
-    int indices_idx = 1;
+    const int values_idx = 0;
+    const int indices_idx = 1;
     const int pointers_idx = 2;
 
-    if (encoding == dnnl_csr) {
-        // fill pointers for CSR encoding
-        mem_fp.set_elem(0, 0, pointers_idx);
-        mem_dt.set_elem(0, 0, pointers_idx);
+    // Fill pointers.
+    mem_fp.set_elem(0, 0, pointers_idx);
+    mem_dt.set_elem(0, 0, pointers_idx);
 
-        for (int64_t i = 0; i < dim0; i++) {
-            const int32_t pointer
-                    = mem_fp.get_elem(i, pointers_idx) + distributed_nnz[i];
-            mem_fp.set_elem(i + 1, pointer, pointers_idx);
-            mem_dt.set_elem(i + 1, pointer, pointers_idx);
-        }
-    } else if (encoding == dnnl_coo) {
-        values_idx = 0;
-        indices_idx = 2;
-        const int row_indices_idx = 1;
-
-        // fill row indices for COO encoding
-        int32_t row_ptr = 0;
-
-        for (int64_t i = 0; i < dim0; i++) {
-            for (int32_t j = 0; j < distributed_nnz[i]; j++) {
-                mem_fp.set_elem(row_ptr + j, i, row_indices_idx);
-                mem_dt.set_elem(row_ptr + j, i, row_indices_idx);
-            }
-            row_ptr = row_ptr + distributed_nnz[i];
-        }
+    for (int64_t i = 0; i < dim0; i++) {
+        const int32_t pointer
+                = mem_fp.get_elem(i, pointers_idx) + distributed_nnz[i];
+        mem_fp.set_elem(i + 1, pointer, pointers_idx);
+        mem_dt.set_elem(i + 1, pointer, pointers_idx);
     }
 
     std::uniform_int_distribution<> indices_gen(0, dim1 - 1);
@@ -379,12 +336,8 @@ int fill_sparse_data(data_kind_t kind, const prb_t *prb, dnn_mem_t &mem_dt,
 
         for (int64_t i = idx_start; i < idx_end; i++) {
             float val = values_gen(values_seed);
-            mem_fp.set_elem(i,
-                    round_to_nearest_representable(cfg.get_dt(kind), val),
-                    values_idx);
-            mem_dt.set_elem(i,
-                    round_to_nearest_representable(cfg.get_dt(kind), val),
-                    values_idx);
+            mem_fp.set_elem(i, val, values_idx);
+            mem_dt.set_elem(i, val, values_idx);
         }
     });
 
@@ -406,12 +359,9 @@ int fill_data(data_kind_t kind, const prb_t *prb, const cfg_t &cfg,
 #ifdef DNNL_EXPERIMENTAL_SPARSE
     auto src_encoding = prb->sparse_options.get_encoding(DNNL_ARG_SRC);
     auto wei_encoding = prb->sparse_options.get_encoding(DNNL_ARG_WEIGHTS);
-
-    if ((kind == SRC && (src_encoding == dnnl_csr || src_encoding == dnnl_coo))
-            || (kind == WEI
-                    && (wei_encoding == dnnl_csr || wei_encoding == dnnl_coo)))
-        return fill_sparse_data(kind, prb, mem_dt, mem_fp, res,
-                kind == SRC ? src_encoding : wei_encoding);
+    if ((kind == SRC && src_encoding == dnnl_csr)
+            || (kind == WEI && wei_encoding == dnnl_csr))
+        return fill_csr_data(kind, prb, mem_dt, mem_fp, res);
 
     bool is_wei_sparse_packed = wei_encoding == dnnl_packed;
     std::vector<bool> nnz_mask;
@@ -499,86 +449,48 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
     skip_unimplemented_prelu_po(prb->attr, res, dnnl_matmul);
 
 #ifdef DNNL_EXPERIMENTAL_SPARSE
-    if ((is_nvidia_gpu() || is_amd_gpu()) && !prb->sparse_options.is_def()) {
-        BENCHDNN_PRINT(2,
-                "[SKIP][%s:%d]: oneDNN doesn't support sparse matmul for "
-                "NVIDIA and AMD GPUs.\n",
-                __FILE__, __LINE__);
-        res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
-        return;
-    }
-
     const auto wei_encoding
             = prb->sparse_options.get_encoding(DNNL_ARG_WEIGHTS);
-    bool is_wei_dense = (wei_encoding == dnnl_sparse_encoding_undef);
-    bool is_src_coo_sparse
-            = (prb->sparse_options.get_encoding(DNNL_ARG_SRC) == dnnl_coo);
-    if (!prb->sparse_options.is_def() && is_gpu()
-            && (!is_wei_dense || !is_src_coo_sparse)) {
-        BENCHDNN_PRINT(2,
-                "[SKIP][%s:%d]: GPU sparse matmul only supports COO encoding "
-                "for source.\n",
-                __FILE__, __LINE__);
-        res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
-        return;
-    }
-
-    if (!prb->sparse_options.is_def() && is_cpu() && is_wei_dense
-            && prb->wtag != "any" && prb->wtag != "ab") {
-        BENCHDNN_PRINT(2,
-                "[SKIP][%s:%d]: Only `any` and `ab` tags are supported for "
-                "dense weights on CPU.\n",
-                __FILE__, __LINE__);
-        res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
-        return;
-    }
-
-    if (wei_encoding == dnnl_packed) {
-        BENCHDNN_PRINT(2,
-                "[SKIP][%s:%d]: Weights argument doesn't support packed "
-                "encoding.\n",
-                __FILE__, __LINE__);
-        res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
+    if ((is_gpu() && !prb->sparse_options.is_def())
+            || wei_encoding == dnnl_packed) {
+        res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
         return;
     }
 #endif
 
     if (is_cpu()) {
+        // CPU doesn't support x8s8f16
         const bool is_x8s8f16
                 = prb->wei_dt() == dnnl_s8 && prb->dst_dt() == dnnl_f16;
         if (is_x8s8f16) {
-            BENCHDNN_PRINT(2, "[SKIP][%s:%d]: CPU doesn't support x8s8f16.\n",
-                    __FILE__, __LINE__);
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
             return;
         }
     }
 
     if (is_gpu()) {
-        const auto &po = prb->attr.post_ops;
-        if (prb->dst_dt() == dnnl_f64 && !po.is_def()) {
-            BENCHDNN_PRINT(2,
-                    "[SKIP][%s:%d]: Post-ops for f64 data type is not "
-                    "supported.\n",
-                    __FILE__, __LINE__);
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+        // GPU supports only single zero-point per tensor.
+        if (prb->attr.zero_points.get(DNNL_ARG_SRC).policy != policy_t::COMMON
+                || prb->attr.zero_points.get(DNNL_ARG_DST).policy
+                        != policy_t::COMMON) {
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
             return;
         }
 
+        // GPU does not support grouped scales or zero-points.
+        if (prb->attr.zero_points.get(DNNL_ARG_WEIGHTS).policy
+                        == policy_t::PER_OCIC
+                || prb->attr.scales.get(DNNL_ARG_WEIGHTS).policy
+                        == policy_t::PER_OCIC) {
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
+            return;
+        }
+
+        // GPU supports only default sum_dt argument.
+        const auto &po = prb->attr.post_ops;
         const int sum_idx = po.find(attr_t::post_ops_t::kind_t::SUM);
         if (sum_idx != -1 && po.entry[sum_idx].sum.dt != dnnl_data_type_undef) {
-            BENCHDNN_PRINT(2,
-                    "[SKIP][%s:%d]: GPU doesn't support non-default sum_dt "
-                    "argument.\n",
-                    __FILE__, __LINE__);
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
             return;
         }
 
@@ -595,123 +507,74 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                 prb->attr.zero_points.get(DNNL_ARG_DST).is_def()
                         && rt_dims_are_none && prb->ndims <= 2);
         if (!x8s8bf16_ok) {
-            BENCHDNN_PRINT(2,
-                    "[SKIP][%s:%d]: x8s8bf16 configuration on GPU doesn't "
-                    "support certain features.\n",
-                    __FILE__, __LINE__);
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
             return;
         }
 
+        // GPU supports bf16 bias only for bf16 config, with a single batch dim.
         const bool is_bf16 = prb->src_dt() == dnnl_bf16
                 && prb->wei_dt() == dnnl_bf16
                 && (prb->dst_dt() == dnnl_bf16 || prb->dst_dt() == dnnl_f32);
         const bool bf16_bias_ok = IMPLICATION(
                 prb->bia_dt == dnnl_bf16, prb->ndims <= 2 + is_bf16);
         if (!bf16_bias_ok) {
-            BENCHDNN_PRINT(2,
-                    "[SKIP][%s:%d]: bf16 bias support is limited to bf16 "
-                    "configuration and 2D-matmul.\n",
-                    __FILE__, __LINE__);
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
             return;
         }
 
+        // Weights decompression is supported on through ref on pre XeHPG
+        // platforms with limited post-ops support.
+        if (prb->weights_decompression()
+                && (!prb->attr.zero_points.is_def()
+                        || !prb->attr.scales.is_def())) {
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
+            return;
+        }
+
+        // GPU supports fp8 through ref only for f8_e4m3 on all platformas and
+        // for f8_e5m2 pre XeHPC with limited post-op support.
         if (((prb->src_dt() == dnnl_f8_e4m3 || prb->dst_dt() == dnnl_f8_e4m3)
                     || (prb->src_dt() == dnnl_f8_e5m2
                             || prb->dst_dt() == dnnl_f8_e5m2))
                 && (!po.is_def() || !prb->attr.scales.is_def())) {
-            BENCHDNN_PRINT(2,
-                    "[SKIP][%s:%d]: GPU supports fp8 through ref only for "
-                    "f8_e4m3 on all platformas and for f8_e5m2 pre-XeHPC with "
-                    "limited post-op support.\n",
-                    __FILE__, __LINE__);
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
-            return;
-        }
-
-        if (prb->src_dt() == dnnl_f4_e2m1 || prb->dst_dt() == dnnl_f4_e2m1
-                || prb->wei_dt() == dnnl_f4_e2m1) {
-            BENCHDNN_PRINT(2, "[SKIP][%s:%d]: GPU has no fp4 support.\n",
-                    __FILE__, __LINE__);
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
             return;
         }
     }
 }
 
 void skip_invalid_prb(const prb_t *prb, res_t *res) {
-    if (!prb->attr.zero_points.is_def()
-            && (prb->wei_dt() != dnnl_s8 && prb->wei_dt() != dnnl_u8
-                    && prb->wei_dt() != dnnl_s4 && prb->wei_dt() != dnnl_u4)) {
-        BENCHDNN_PRINT(2,
-                "[INVALID][%s:%d]: Zero-points applied to a non-integral data "
-                "type.\n",
-                __FILE__, __LINE__);
-        res->state = SKIPPED;
-        res->reason = skip_reason::invalid_case;
+// oneDNN doesn't provide SYCL interoperability API for creating a sparse
+// memory therefore all SYCL cases must be skipped.
+#ifdef DNNL_EXPERIMENTAL_SPARSE
+    if (is_sycl_engine(get_test_engine()) && !prb->sparse_options.is_def()) {
+        res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
+        return;
+    }
+#endif
+
+    // Zero-points for non-integral data type does not make sense
+    if (!prb->attr.zero_points.is_def() && prb->wei_dt() != dnnl_s8
+            && prb->wei_dt() != dnnl_u8) {
+        res->state = SKIPPED, res->reason = INVALID_CASE;
         return;
     }
 
+    // Weights decompression requires IC to be divisible by groups
+    // for both scales and zero points
     if (!prb->attr.scales.get(DNNL_ARG_WEIGHTS).is_def()) {
         const auto &groups = prb->attr.scales.get(DNNL_ARG_WEIGHTS).groups;
-        if (!groups.empty()) {
-            if (prb->k % groups[0]) {
-                BENCHDNN_PRINT(2,
-                        "[INVALID][%s:%d]: Weights decompression scales "
-                        "require IC ('%d') to be divisible by groups ('%d')\n",
-                        __FILE__, __LINE__, (int)prb->k, (int)groups[0]);
-                res->state = SKIPPED;
-                res->reason = skip_reason::invalid_case;
-                return;
-            } else if (groups.size() > 2) {
-                BENCHDNN_PRINT(2,
-                        "[INVALID][%s:%d]: Weights decompression scales groups "
-                        "support only two dimensions\n",
-                        __FILE__, __LINE__);
-                res->state = SKIPPED;
-                res->reason = skip_reason::invalid_case;
-                return;
-            }
+        if (!groups.empty() && (prb->k % groups[0] || groups.size() > 2)) {
+            res->state = SKIPPED, res->reason = INVALID_CASE;
+            return;
         }
     }
-
     if (!prb->attr.zero_points.get(DNNL_ARG_WEIGHTS).is_def()) {
         const auto &groups = prb->attr.zero_points.get(DNNL_ARG_WEIGHTS).groups;
-        if (!groups.empty()) {
-            if (groups[0] > 0 && (prb->k % groups[0])) {
-                BENCHDNN_PRINT(2,
-                        "[INVALID][%s:%d]: Weights decompression zero-points "
-                        "require IC ('%d') to be divisible by groups ('%d')\n",
-                        __FILE__, __LINE__, (int)prb->k, (int)groups[0]);
-                res->state = SKIPPED;
-                res->reason = skip_reason::invalid_case;
-                return;
-            } else if (groups.size() > 2) {
-                BENCHDNN_PRINT(2,
-                        "[INVALID][%s:%d]: Weights decompression zero-points "
-                        "groups support only two dimensions\n",
-                        __FILE__, __LINE__);
-                res->state = SKIPPED;
-                res->reason = skip_reason::invalid_case;
-                return;
-            }
+        if (!groups.empty() && (prb->k % groups[0] || groups.size() > 2)) {
+            res->state = SKIPPED, res->reason = INVALID_CASE;
+            return;
         }
-    }
-
-    if ((prb->wei_dt() == dnnl_s4 || prb->wei_dt() == dnnl_u4)
-            && (prb->n % 2)) {
-        BENCHDNN_PRINT(2,
-                "[INVALID][%s:%d]: Int4 Weights decompression requires OC "
-                "('%d') to be even.\n",
-                __FILE__, __LINE__, (int)prb->n);
-        res->state = SKIPPED;
-        res->reason = skip_reason::invalid_case;
-        return;
     }
 
     auto src_rt_mask = prb->src_runtime_dim_mask();
@@ -723,16 +586,15 @@ void skip_invalid_prb(const prb_t *prb, res_t *res) {
     if ((src_rt_mask.any() && prb->stag == "any")
             || (wei_rt_mask.any() && prb->wtag == "any")
             || (dst_rt_mask.any() && prb->dtag == "any")) {
-        BENCHDNN_PRINT(1,
-                "[INVALID][%s:%d]: Runtime dimensions require user to specify "
-                "a memory format for affected arguments. Consider specifying "
-                "`--stag`, `--wtag`, and/or `--dtag`.\n",
-                __FILE__, __LINE__);
-        res->state = SKIPPED;
-        res->reason = skip_reason::invalid_case;
+        BENCHDNN_PRINT(1, "%s\n",
+                "WARNING: runtime dimensions require user to specify a memory "
+                "format for affected arguments. Consider specifying `--stag`, "
+                "`--wtag`, and/or `--dtag`.");
+        res->state = SKIPPED, res->reason = INVALID_CASE;
         return;
     }
 
+    // Runtime masks for `m`, `k`, and `n` dimensions must be consistent.
     const int m_idx = prb->ndims - 2;
     const int k_idx_src = prb->ndims - 1;
     const int k_idx_wei = prb->ndims - 2;
@@ -740,15 +602,11 @@ void skip_invalid_prb(const prb_t *prb, res_t *res) {
     if (src_rt_mask[m_idx] != dst_rt_mask[m_idx]
             || src_rt_mask[k_idx_src] != wei_rt_mask[k_idx_wei]
             || wei_rt_mask[n_idx] != dst_rt_mask[n_idx]) {
-        BENCHDNN_PRINT(2,
-                "[INVALID][%s:%d]: Runtime masks for `m`, `k`, and `n` "
-                "dimensions must be consistent.\n",
-                __FILE__, __LINE__);
-        res->state = SKIPPED;
-        res->reason = skip_reason::invalid_case;
+        res->state = SKIPPED, res->reason = INVALID_CASE;
         return;
     }
 
+    // Runtime masks for batch dimensions must be consistent.
     if (prb->ndims > 2) {
         dims_mask_t batch_rt_mask;
         for (int i = 0; i < prb->ndims - 2; ++i)
@@ -757,12 +615,7 @@ void skip_invalid_prb(const prb_t *prb, res_t *res) {
         wei_rt_mask &= batch_rt_mask;
         dst_rt_mask &= batch_rt_mask;
         if (src_rt_mask != wei_rt_mask || src_rt_mask != dst_rt_mask) {
-            BENCHDNN_PRINT(2,
-                    "[INVALID][%s:%d]: Runtime masks for batch dimensions must "
-                    "be consistent.\n",
-                    __FILE__, __LINE__);
-            res->state = SKIPPED;
-            res->reason = skip_reason::invalid_case;
+            res->state = SKIPPED, res->reason = INVALID_CASE;
             return;
         }
     }
@@ -770,6 +623,9 @@ void skip_invalid_prb(const prb_t *prb, res_t *res) {
 
 void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
         const args_t &ref_args) {
+    const auto dt = prb->get_dt(kind);
+    const float trh = dt == dnnl_f32 ? 1e-6f : epsilon_dt(dt);
+    cmp.set_threshold(trh);
     cmp.set_zero_trust_percent(90.f); // TODO: why so bad filling?
 }
 
@@ -784,7 +640,7 @@ std::vector<int> supported_exec_args(dir_t dir) {
 };
 
 int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
-        dnnl_primitive_t prim, const prb_t *prb, res_t *res,
+        dnnl_primitive_t prim, const prb_t *prb, res_t *res, dir_t dir,
         dnnl_primitive_t prim_ref) {
     if (has_bench_mode_modifier(mode_modifier_t::no_host_memory)) return OK;
 
@@ -816,12 +672,12 @@ int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
 
         if ((is_sparse_src || is_sparse_wei) && !is_sparse_wei_packed) {
             if (is_sparse_src) {
-                auto src_fp_d = create_md(prb, SRC);
+                auto src_fp_d = create_md(prb, SRC, dnnl_f32);
                 ref_mem_map.emplace(exec_arg, dnn_mem_t(src_fp_d, ref_engine));
             }
 
             if (is_sparse_wei) {
-                auto wei_fp_d = create_md(prb, WEI);
+                auto wei_fp_d = create_md(prb, WEI, dnnl_f32);
                 ref_mem_map.emplace(exec_arg, dnn_mem_t(wei_fp_d, ref_engine));
             }
         } else
@@ -892,14 +748,6 @@ int check_cacheit(
     return OK;
 }
 
-std::vector<data_kind_t> get_kinds_to_check(const prb_t *prb) {
-    // TODO: move the regular buffer kinds like SRC or DST to a common function,
-    //       e.g. get_kinds_to_check_default_case
-    std::vector<data_kind_t> check_kinds = {DST};
-    if (!prb->attr.dropout.is_def()) check_kinds.push_back(DROPOUT_MASK);
-    return check_kinds;
-}
-
 int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
         const prb_t *prb, res_t *res) {
     const auto &prim = v_prim[0];
@@ -907,19 +755,16 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     dnn_mem_map_t mem_map, ref_mem_map;
     init_memory_args<prb_t>(mem_map, prb, prim, supported_exec_args(prb->dir));
-    TIME_FILL(SAFE(init_ref_memory_args(
-                           ref_mem_map, mem_map, prim, prb, res, prim_ref),
+    TIME_FILL(SAFE(init_ref_memory_args(ref_mem_map, mem_map, prim, prb, res,
+                           prb->dir, prim_ref),
             WARN));
 
     args_t args(mem_map), ref_args(ref_mem_map);
 
     SAFE(execute_and_wait(prim, args, res), WARN);
 
-    check_correctness(prb, get_kinds_to_check(prb), args, ref_args, setup_cmp,
-            res, prim_ref);
-    SAFE(check_bitwise(prim, get_kinds_to_check(prb), args, prb->attr,
-                 prb->inplace, res),
-            WARN);
+    check_correctness(prb, {DST}, args, ref_args, setup_cmp, res, prim_ref);
+    SAFE(check_bitwise(prim, {DST}, args, prb->inplace, res), WARN);
 
     return measure_perf(prb->ctx_exe, res, prim, args);
 }

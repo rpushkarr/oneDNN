@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2024 Intel Corporation
+* Copyright 2022-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -23,7 +23,6 @@
 #include "ittnotify.hpp"
 #endif
 
-#include "cache_hit_types.hpp"
 #include "primitive.hpp"
 #include "primitive_desc_iface.hpp"
 #include "primitive_exec_types.hpp"
@@ -63,7 +62,7 @@ status_t primitive_create(primitive_iface_t **primitive_iface,
         const primitive_desc_iface_t *primitive_desc_iface,
         const cache_blob_t &cache_blob = cache_blob_t()) {
 
-    std::pair<primitive_iface_t *, cache_state_t> p_iface;
+    std::pair<primitive_iface_t *, bool> p_iface;
 
     if (get_verbose(verbose_t::create_profile,
                 prim_kind2_comp_kind(primitive_desc_iface->impl()->kind()))) {
@@ -72,8 +71,8 @@ status_t primitive_create(primitive_iface_t **primitive_iface,
                 p_iface, cache_blob));
         double duration_ms = get_msec() - start_ms;
 
-        if (cache_blob) p_iface.second = cache_state_t::persistent_hit;
-        const char *str = cache_state2str(p_iface.second);
+        const char *str = p_iface.second ? ":cache_hit" : ":cache_miss";
+        if (cache_blob) str = ":from_cache_blob";
 
         VPROF(start_ms, primitive, create, str, p_iface.first->pd()->info(),
                 duration_ms);

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2024 Intel Corporation
+* Copyright 2016-2023 Intel Corporation
 * Copyright 2018 YANDEX LLC
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,7 +48,9 @@ using namespace Xbyak;
 jit_avx2_1x1_conv_kernel_f32::jit_avx2_1x1_conv_kernel_f32(
         const jit_1x1_conv_conf_t &ajcp, const primitive_attr_t &attr,
         const memory_desc_t &dst_md)
-    : jit_generator(jit_name(), avx2), jcp(ajcp), attr_(attr) {
+    : jit_generator(jit_name(), nullptr, MAX_CODE_SIZE, true, avx2)
+    , jcp(ajcp)
+    , attr_(attr) {
     if (jcp.with_eltwise || jcp.with_binary) {
         using namespace binary_injector;
         static constexpr bool preserve_gpr = true;
@@ -678,8 +680,7 @@ void jit_avx2_1x1_conv_kernel_f32::generate() {
 
     postamble();
 
-    if (jcp.with_eltwise)
-        postops_injector_->prepare_table(/* generate = */ true);
+    if (jcp.with_eltwise) postops_injector_->prepare_table();
 }
 
 status_t jit_avx2_1x1_conv_kernel_f32::init_conf(jit_1x1_conv_conf_t &jcp,
@@ -785,8 +786,8 @@ status_t jit_avx2_1x1_conv_kernel_f32::init_conf(jit_1x1_conv_conf_t &jcp,
     }
 
     if (jcp.with_eltwise || jcp.with_binary)
-        VDISPATCH_CONV_IC(jcp.isa >= avx2, VERBOSE_UNSUPPORTED_FEATURE,
-                "eltwise and binary post-ops not implemented on isa");
+        VDISPATCH_CONV_IC(jcp.isa >= avx2,
+                "isa does not support eltwise and binary post-ops");
 
     using namespace injector;
     static constexpr bool sum_at_pos_0_only = true;
@@ -1002,7 +1003,7 @@ status_t jit_avx2_1x1_conv_kernel_f32::init_conf(jit_1x1_conv_conf_t &jcp,
                 = static_cast<dim_t>(jcp.mb) * jcp.nb_reduce;
         // prevent too large argument to cpu reducer
         VDISPATCH_CONV_IC(mb_with_nb_reduce <= std::numeric_limits<int>::max(),
-                VERBOSE_BLOCKING_FAIL, "bad argument for cpu reducer");
+                VERBOSE_BLOCKING_FAIL);
     }
 
     return status::success;

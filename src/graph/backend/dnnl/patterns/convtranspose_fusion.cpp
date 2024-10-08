@@ -14,7 +14,7 @@
 * limitations under the License.
 *******************************************************************************/
 
-#include "graph/backend/dnnl/kernels/conv_transpose.hpp"
+#include "graph/backend/dnnl/kernels/convtranspose.hpp"
 #include "graph/backend/dnnl/patterns/fusions.hpp"
 #include "graph/backend/dnnl/patterns/pattern_matcher_pass.hpp"
 #include "graph/backend/dnnl/patterns/utils.hpp"
@@ -62,7 +62,6 @@ features on GPU:
 3. ConvTranspose with zero points
 While CPU supports.
 */
-#if DNNL_CPU_RUNTIME != DNNL_RUNTIME_NONE
 DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(
         dnnl, int8_convtranspose_post_ops_fusion_cpu)
         .set_priority(10.5f)
@@ -124,7 +123,7 @@ DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(
         .set_attr<FCreateKernel>("FCreateKernel", []() -> kernel_ptr {
             return std::make_shared<quantized_convtranspose>();
         });
-#endif
+
 /*
 ConvTranspose: Currently DNNL Backend doesn't support below
 features on GPU:
@@ -133,7 +132,6 @@ features on GPU:
 3. ConvTranspose with zero points
 While CPU supports.
 */
-#if DNNL_GPU_RUNTIME != DNNL_RUNTIME_NONE
 DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(
         dnnl, int8_convtranspose_post_ops_fusion_gpu)
         .set_priority(10.5f)
@@ -203,7 +201,7 @@ DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(
         .set_attr<FCreateKernel>("FCreateKernel", []() -> kernel_ptr {
             return std::make_shared<quantized_convtranspose>();
         });
-#endif
+
 /*
                     [quant_weight]*
         |                  |
@@ -231,7 +229,6 @@ features on GPU:
 4. Post-sum with zero points
 While CPU supports.
 */
-#if DNNL_CPU_RUNTIME != DNNL_RUNTIME_NONE
 DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(
         dnnl, int8_convtranspose_add_post_ops_fusion_cpu)
         .set_priority(10.6f)
@@ -281,7 +278,7 @@ DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(
         .set_attr<FCreateKernel>("FCreateKernel", []() -> kernel_ptr {
             return std::make_shared<quantized_convtranspose>();
         });
-#endif
+
 /*
 ConvTranspose: Currently DNNL Backend doesn't support below
 features on GPU:
@@ -291,7 +288,6 @@ features on GPU:
 4. Post-sum with zero points
 While CPU supports.
 */
-#if DNNL_GPU_RUNTIME != DNNL_RUNTIME_NONE
 DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(
         dnnl, int8_convtranspose_add_post_ops_fusion_gpu)
         .set_priority(10.6f)
@@ -350,7 +346,6 @@ DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(
         .set_attr<FCreateKernel>("FCreateKernel", []() -> kernel_ptr {
             return std::make_shared<quantized_convtranspose>();
         });
-#endif
 
 DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, convtranspose_post_ops_fusion)
         .set_priority(10.4f)

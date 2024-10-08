@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2024 Intel Corporation
+* Copyright 2022-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -60,8 +60,8 @@ status_t fwd_conv_desc_create(
     dims_t overflow_r;
     dim_t ks = 1;
     for (int i = 0; i < ndims_spatial; i++) {
+        // only unit strides are allowed for bwd-to-fwd conversion
         VDISPATCH_CONV_IC(bwd_conv_d->strides[i] == 1,
-                VERBOSE_UNSUPPORTED_FEATURE,
                 "only unit strides are allowed for bwd-to-fwd conversion");
         const dim_t K
                 = bwd_weights_md.dims[bwd_weights_md.ndims - ndims_spatial + i];
@@ -93,9 +93,6 @@ status_t fwd_conv_desc_create(
         fwd_conv_d->diff_src_desc = fwd_conv_d->src_desc;
         fwd_conv_d->diff_dst_desc = fwd_conv_d->dst_desc;
     }
-    // Note: internal field to hint this conv is created from deconv.
-    fwd_conv_d->use_inversion = true;
-
     return status::success;
 }
 } // namespace
@@ -125,7 +122,9 @@ status_t brgemm_convolution_bwd_t<isa>::pd_t::init(engine_t *engine) {
         const auto pd_1x1 = dynamic_cast<fwd_1x1_conv_pd_t *>((*it).get());
         if (pd_1x1 != nullptr) break; // 1x1 implementation found
 
-        using fwd_conv_pd_t = typename brgemm_convolution_fwd_t<isa>::pd_t;
+        constexpr bool use_inversion = true; // invert weights' spatial indices
+        using fwd_conv_pd_t =
+                typename brgemm_convolution_fwd_t<isa, use_inversion>::pd_t;
         const auto pd = dynamic_cast<fwd_conv_pd_t *>((*it).get());
         if (pd != nullptr) break; // non-1x1 implementation found
     }

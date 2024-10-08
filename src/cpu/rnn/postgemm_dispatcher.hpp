@@ -247,12 +247,6 @@ protected:
                 && utils::one_of(src_type, data_type::f32, data_type::bf16,
                         data_type::f16);
 
-        // Note: Using ref (no-jit) post-gemm for avx2_vnni_2 for now.
-        // Implement jit version of post-gemm if perf becomes a concern.
-        if (utils::one_of(src_type, data_type::bf16, data_type::f16)
-                && !mayiuse(avx512_core))
-            return status::success;
-
 #define CREATE_WITH_DIR(k, ker_t) \
     do { \
         if (mayiuse(avx512_core)) \

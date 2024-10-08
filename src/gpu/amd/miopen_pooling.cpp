@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2022 Intel Corporation
 * Copyright 2020-2022 Codeplay Software Limited
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,10 +17,10 @@
 
 #include "gpu/amd/miopen_pooling.hpp"
 #include "common/nstl.hpp"
-#include "gpu/amd/stream.hpp"
 #include "gpu/amd/sycl_hip_scoped_context.hpp"
-#include "xpu/sycl/buffer_memory_storage.hpp"
-#include "xpu/sycl/memory_storage_helper.hpp"
+#include "gpu/amd/sycl_hip_stream.hpp"
+#include "sycl/sycl_buffer_memory_storage.hpp"
+#include "sycl/sycl_memory_storage_helper.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -32,7 +32,8 @@ status_t miopen_pooling_fwd_t::execute(const exec_ctx_t &ctx) const {
     memory_desc_wrapper dst_wrap(pd()->dst_md());
     if (dst_wrap.size() == 0) return status::success;
 
-    amd::stream_t *hip_stream = utils::downcast<amd::stream_t *>(ctx.stream());
+    amd::sycl_hip_stream_t *hip_stream
+            = utils::downcast<amd::sycl_hip_stream_t *>(ctx.stream());
 
     memory_desc_wrapper src_wrap(pd()->src_md());
 
@@ -41,7 +42,7 @@ status_t miopen_pooling_fwd_t::execute(const exec_ctx_t &ctx) const {
             auto arg_dst = CTX_OUT_SYCL_MEMORY(DNNL_ARG_DST);
 
             compat::host_task(cgh, [=](const compat::interop_handle &ih) {
-                auto &sycl_engine = *utils::downcast<amd::engine_t *>(
+                auto &sycl_engine = *utils::downcast<sycl_hip_engine_t *>(
                         hip_stream->engine());
                 auto sc = hip_sycl_scoped_context_handler_t(sycl_engine);
 
@@ -77,8 +78,8 @@ status_t miopen_pooling_fwd_t::execute(const exec_ctx_t &ctx) const {
         auto arg_wkspace = CTX_OUT_SYCL_MEMORY(DNNL_ARG_WORKSPACE);
 
         compat::host_task(cgh, [=](const compat::interop_handle &ih) {
-            auto &sycl_engine
-                    = *utils::downcast<amd::engine_t *>(hip_stream->engine());
+            auto &sycl_engine = *utils::downcast<sycl_hip_engine_t *>(
+                    hip_stream->engine());
             auto sc = hip_sycl_scoped_context_handler_t(sycl_engine);
             auto handle = hip_stream->get_miopen_handle();
             void *x = arg_src.get_native_pointer(ih);
@@ -98,7 +99,8 @@ status_t miopen_pooling_bwd_t::execute(const exec_ctx_t &ctx) const {
 
     memory_desc_wrapper wrap(pd()->diff_src_md());
     if (wrap.size() == 0) { return status::success; }
-    amd::stream_t *hip_stream = utils::downcast<amd::stream_t *>(ctx.stream());
+    amd::sycl_hip_stream_t *hip_stream
+            = utils::downcast<amd::sycl_hip_stream_t *>(ctx.stream());
 
     return hip_stream->interop_task([&](::sycl::handler &cgh) {
         auto arg_diff_src = CTX_OUT_SYCL_MEMORY(DNNL_ARG_DIFF_SRC);
@@ -106,8 +108,8 @@ status_t miopen_pooling_bwd_t::execute(const exec_ctx_t &ctx) const {
         auto arg_wkspace = CTX_IN_SYCL_MEMORY(DNNL_ARG_WORKSPACE);
 
         compat::host_task(cgh, [=](const compat::interop_handle &ih) {
-            auto &sycl_engine
-                    = *utils::downcast<amd::engine_t *>(hip_stream->engine());
+            auto &sycl_engine = *utils::downcast<sycl_hip_engine_t *>(
+                    hip_stream->engine());
             auto sc = hip_sycl_scoped_context_handler_t(sycl_engine);
             auto handle = hip_stream->get_miopen_handle();
             void *dx = arg_diff_src.get_native_pointer(ih);

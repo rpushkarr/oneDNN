@@ -1,7 +1,7 @@
 /*******************************************************************************
 * Copyright 2018-2023 Intel Corporation
-* Copyright 2020-2024 FUJITSU LIMITED
-* Copyright 2022-2024 Arm Ltd. and affiliates
+* Copyright 2020-2023 FUJITSU LIMITED
+* Copyright 2022-2023 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -161,20 +161,13 @@ struct jit_uni_reorder_kernel_f32_t : public kernel_t, public jit_generator {
     static bool applicable(const prb_t &p) {
         using namespace data_type;
 
-        bool bf16_ok
-                = (mayiuse_bf16() && (p.itype == bf16) && (p.otype == bf16)
-                          && !interim_f32_needed(p, false) && p.beta == 0.f)
-                || (p.itype != bf16 && p.otype != bf16)
-                || (p.itype == f32 && p.otype == bf16 && mayiuse_bf16()
-                        && p.beta == 0.f);
-
         bool ok = true && p.ndims > 0
-                && utils::one_of(p.itype, f32, bf16, s32, data_type::s8, u8)
+                && utils::one_of(p.itype, f32, s32, data_type::s8, u8)
                 && utils::one_of(p.otype, f32, bf16, s32, data_type::s8, u8)
                 && utils::everyone_is(0, p.ioff, p.ooff) /* do we need this? */
                 && utils::one_of(p.beta, 0.f, 1.f) /* anything else? */
                 && simple_impl_desc_init(p, nullptr) && prb_has_small_strides(p)
-                && bf16_ok;
+                && ((p.otype != bf16) || (p.itype == f32 && mayiuse_bf16()));
 
         return ok;
     }
@@ -708,7 +701,7 @@ struct jit_uni_reorder_kernel_f32_t : public kernel_t, public jit_generator {
         const int load_tail_step
                 = !can_load_xmm && can_store_xmm ? ur_step : load_step;
 
-        const bool interim_f32 = interim_f32_needed(prb_, compensation_needed_);
+        const bool interim_f32 = interim_f32_needed();
 
         const bool need_saturation
                 = (utils::one_of(prb_.otype, u8, data_type::s8, s32)
@@ -1291,17 +1284,17 @@ struct jit_uni_reorder_kernel_f32_t : public kernel_t, public jit_generator {
         }
     }
 
-    static bool interim_f32_needed(const prb_t &prb, bool compensation_needed) {
+    bool interim_f32_needed() {
         using namespace data_type;
-        bool ret = utils::one_of(f32, prb.itype, prb.otype)
-                || prb.src_scale_type != scale_type_t::NONE
-                || prb.dst_scale_type != scale_type_t::NONE || prb.beta != 0.f
-                || ((prb.req_src_zp || prb.req_dst_zp)
-                                ? !(prb.itype == s32 && prb.otype == s32)
+
+        return utils::one_of(f32, prb_.itype, prb_.otype)
+                || prb_.src_scale_type != scale_type_t::NONE
+                || prb_.dst_scale_type != scale_type_t::NONE || prb_.beta != 0.f
+                || ((prb_.req_src_zp || prb_.req_dst_zp)
+                                ? !(prb_.itype == s32 && prb_.otype == s32)
                                 : false)
-                || (prb.itype != f32 && compensation_needed)
-                || prb.scale_adjust != 1.f;
-        return ret;
+                || (prb_.itype != f32 && compensation_needed_)
+                || prb_.scale_adjust != 1.f;
     }
 
     void process_unroll_generic(
@@ -1319,7 +1312,7 @@ struct jit_uni_reorder_kernel_f32_t : public kernel_t, public jit_generator {
 
         int curr = 0; // will switch between 0 and 1
 
-        const bool interim_f32 = interim_f32_needed(prb_, compensation_needed_);
+        const bool interim_f32 = interim_f32_needed();
 
         if (prb_.req_src_zp) {
             add_imm(X_DEFAULT_ADDR, PARAM(src_zp), X_TMP_0);
@@ -2007,7 +2000,6 @@ private:
 struct jit_single_blk_kernel_t : public jit_generator {
     DECLARE_CPU_JIT_AUX_FUNCTIONS(jit_single_blk_kernel)
     static bool applicable(const prb_t &p) {
-
         using namespace data_type;
 
         bool ok = p.ndims >= 2 && mayiuse(sve_256)
@@ -2034,8 +2026,7 @@ struct jit_single_blk_kernel_t : public jit_generator {
          *     8    m    1
          *     m    1    8
          */
-        ok = (utils::one_of(n0, 8, 16, 32, 64)
-                     || utils::one_of(n1, 8, 16, 32, 64))
+        ok = (utils::one_of(n0, 8, 16) || utils::one_of(n1, 8, 16))
                 && ((i0 == 1 && o1 == 1 && n0 == i1 && o0 == n1)
                         || (o0 == 1 && i1 == 1 && n0 == o1 && i0 == n1));
         if (!ok) return false;
@@ -2071,9 +2062,6 @@ struct jit_single_blk_kernel_t : public jit_generator {
             scvtf(ymm_zp, P_ALL_ONE / T_m, ymm_zp);
         };
 
-        set_preg(p_tmp2.s, 4, X_TMP_0, X_TMP_1);
-        rev(p_tmp1.s, p_tmp2.s);
-
         preamble();
 
         if (prb_.req_src_zp) load_zp(ymm_src_zp, reg_src_zp);
@@ -2087,14 +2075,8 @@ struct jit_single_blk_kernel_t : public jit_generator {
             gen_ker8x8(0, 0, input_stride, output_stride, 8, 8);
             block_sz = 8;
         } else if (block_sz == 16) {
-            gen_ker16x16_in_8x8(0, 0, input_stride, output_stride);
+            gen_ker16x16_in_8x8(input_stride, output_stride);
             block_sz = 16;
-        } else if (block_sz == 32) {
-            gen_ker32x32_in_16x16(0, 0, input_stride, output_stride);
-            block_sz = 32;
-        } else if (block_sz == 64) {
-            gen_ker64x64_in_32x32(0, 0, input_stride, output_stride);
-            block_sz = 64;
         } else {
             assert(!"unimplemented");
         }
@@ -2119,27 +2101,7 @@ struct jit_single_blk_kernel_t : public jit_generator {
                 t_mask %= 8;
                 if (t_mask != 0) gen_setmask(t_mask);
                 gen_ker16x16_in_8x8(
-                        0, 0, input_stride, output_stride, i_tail, o_tail);
-            }
-        } else if (block_sz == 32) {
-            auto i_tail = input_stride % 32 != 0 ? input_stride % 32 : 32;
-            auto o_tail = output_stride % 32 != 0 ? output_stride % 32 : 32;
-            if (i_tail != o_tail) {
-                auto t_mask = i_tail == 32 ? o_tail : i_tail;
-                t_mask %= 8;
-                if (t_mask != 0) gen_setmask(t_mask);
-                gen_ker32x32_in_16x16(
-                        0, 0, input_stride, output_stride, i_tail, o_tail);
-            }
-        } else if (block_sz == 64) {
-            auto i_tail = input_stride % 64 != 0 ? input_stride % 64 : 64;
-            auto o_tail = output_stride % 64 != 0 ? output_stride % 64 : 64;
-            if (i_tail != o_tail) {
-                auto t_mask = i_tail == 64 ? o_tail : i_tail;
-                t_mask %= 8;
-                if (t_mask != 0) gen_setmask(t_mask);
-                gen_ker64x64_in_32x32(
-                        0, 0, input_stride, output_stride, i_tail, o_tail);
+                        input_stride, output_stride, i_tail, o_tail);
             }
         } else {
             assert(!"unimplemented");
@@ -2199,12 +2161,12 @@ struct jit_single_blk_kernel_t : public jit_generator {
 	ptrue(P_ALL_ONE.b);
 	ptrue(P_TMP.s, VL8);
 	not_(P_TMP.b, P_ALL_ONE/T_z, P_TMP.b);
-    index(z0.s, 0, 1);
-    mov(z0.s, P_TMP/T_m, 0);
-    mov(z_tmp_vec[0].s, 8);
-    mov(z_tmp_vec[0].s, P_TMP/T_m, 0);
-    for(uint32_t i=1; i<lane; i++)
-        add(ZRegS{i}, ZRegS{i-1}, z_tmp_vec[0].s);
+        index(z0.s, 0, 1);
+        mov(z0.s, P_TMP/T_m, 0);
+        mov(z_tmp_vec[0].s, 8);
+        mov(z_tmp_vec[0].s, P_TMP/T_m, 0);
+        for(uint32_t i=1; i<lane; i++)
+          add(ZRegS{i}, ZRegS{i-1}, z_tmp_vec[0].s);
 #endif
 
         ptrue(P_TMP.s, VL4);
@@ -2262,7 +2224,6 @@ struct jit_single_blk_kernel_t : public jit_generator {
     // Gen specific 8x8 transform respect to certain tail condition
     void gen_tr8x8(int i_off, int o_off, int input_stride, int output_stride,
             int in_tail, int out_tail) {
-
         constexpr int lane = 8;
 
         if (in_tail == 0 || out_tail == 0) return;
@@ -2303,30 +2264,22 @@ struct jit_single_blk_kernel_t : public jit_generator {
         gen_tr8x8(i_off, o_off, input_stride, output_stride, in_tail, out_tail);
     }
 
-    void gen_ker16x16_in_8x8(
-            int i_off, int o_off, int input_stride, int output_stride) {
+    void gen_ker16x16_in_8x8(int input_stride, int output_stride) {
         const auto lane = 16;
         const auto sub_lane = lane / 2;
-
-        i_off *= itype_sz_;
-        o_off *= otype_sz_;
-
-        gen_tr8x8(
-                i_off, o_off, input_stride, output_stride, sub_lane, sub_lane);
-        gen_tr8x8(i_off + input_stride * sub_lane * itype_sz_,
-                o_off + sub_lane * otype_sz_, input_stride, output_stride,
-                sub_lane, sub_lane);
-        gen_tr8x8(i_off + sub_lane * itype_sz_,
-                o_off + output_stride * sub_lane * otype_sz_, input_stride,
-                output_stride, sub_lane, sub_lane);
-        gen_tr8x8(i_off + (input_stride * sub_lane + sub_lane) * itype_sz_,
-                o_off + (output_stride * sub_lane + sub_lane) * otype_sz_,
+        gen_tr8x8(0, 0, input_stride, output_stride, sub_lane, sub_lane);
+        gen_tr8x8(input_stride * sub_lane * itype_sz_, sub_lane * otype_sz_,
                 input_stride, output_stride, sub_lane, sub_lane);
+        gen_tr8x8(sub_lane * itype_sz_, output_stride * sub_lane * otype_sz_,
+                input_stride, output_stride, sub_lane, sub_lane);
+        gen_tr8x8((input_stride * sub_lane + sub_lane) * itype_sz_,
+                (output_stride * sub_lane + sub_lane) * otype_sz_, input_stride,
+                output_stride, sub_lane, sub_lane);
     }
 
-    // tail can be 1 ~ 16, using sve2 for now
-    void gen_ker16x16_in_8x8(int i_off, int o_off, int input_stride,
-            int output_stride, int in_tail, int out_tail) {
+    // tail can be 1 ~ 16, using avx2 for now
+    void gen_ker16x16_in_8x8(
+            int input_stride, int output_stride, int in_tail, int out_tail) {
         constexpr auto lane = 16;
         constexpr auto sub_lane = lane / 2;
         auto tail = in_tail != lane ? in_tail : out_tail;
@@ -2334,136 +2287,26 @@ struct jit_single_blk_kernel_t : public jit_generator {
         const auto l_tail = tail < sub_lane ? tail : sub_lane;
         const auto u_tail = tail < sub_lane ? 0 : tail - sub_lane;
 
-        i_off *= itype_sz_;
-        o_off *= otype_sz_;
-
         if (tail == in_tail) {
-            gen_tr8x8(i_off, o_off, input_stride, output_stride, l_tail,
-                    sub_lane);
-            gen_tr8x8(i_off + input_stride * sub_lane * itype_sz_,
-                    o_off + sub_lane * otype_sz_, input_stride, output_stride,
-                    l_tail, sub_lane);
-            gen_tr8x8(i_off + sub_lane * itype_sz_,
-                    o_off + output_stride * sub_lane * otype_sz_, input_stride,
+            gen_tr8x8(0, 0, input_stride, output_stride, l_tail, sub_lane);
+            gen_tr8x8(input_stride * sub_lane * itype_sz_, sub_lane * otype_sz_,
+                    input_stride, output_stride, l_tail, sub_lane);
+            gen_tr8x8(sub_lane * itype_sz_,
+                    output_stride * sub_lane * otype_sz_, input_stride,
                     output_stride, u_tail, sub_lane);
-            gen_tr8x8(i_off + itype_sz_ * (input_stride * sub_lane + sub_lane),
-                    o_off + otype_sz_ * (output_stride * sub_lane + sub_lane),
+            gen_tr8x8(itype_sz_ * (input_stride * sub_lane + sub_lane),
+                    otype_sz_ * (output_stride * sub_lane + sub_lane),
                     input_stride, output_stride, u_tail, sub_lane);
         } else {
-            gen_tr8x8(i_off, o_off, input_stride, output_stride, sub_lane,
-                    l_tail);
-            gen_tr8x8(i_off + input_stride * sub_lane * itype_sz_,
-                    o_off + sub_lane * otype_sz_, input_stride, output_stride,
-                    sub_lane, u_tail);
-            gen_tr8x8(i_off + sub_lane * itype_sz_,
-                    o_off + output_stride * sub_lane * itype_sz_, input_stride,
-                    output_stride, sub_lane, l_tail);
-            gen_tr8x8(i_off + itype_sz_ * (input_stride * sub_lane + sub_lane),
-                    o_off + otype_sz_ * (output_stride * sub_lane + sub_lane),
+            gen_tr8x8(0, 0, input_stride, output_stride, sub_lane, l_tail);
+            gen_tr8x8(input_stride * sub_lane * itype_sz_, sub_lane * otype_sz_,
                     input_stride, output_stride, sub_lane, u_tail);
-        }
-    }
-
-    void gen_ker32x32_in_16x16(
-            int i_off, int o_off, int input_stride, int output_stride) {
-
-        const auto lane = 32;
-        const auto sub_lane = lane / 2;
-        gen_ker16x16_in_8x8(i_off, o_off, input_stride, output_stride);
-        gen_ker16x16_in_8x8(i_off + sub_lane * input_stride, o_off + sub_lane,
-                input_stride, output_stride);
-        gen_ker16x16_in_8x8(i_off + sub_lane, o_off + output_stride * sub_lane,
-                input_stride, output_stride);
-        gen_ker16x16_in_8x8(i_off + input_stride * sub_lane + sub_lane,
-                o_off + output_stride * sub_lane + sub_lane, input_stride,
-                output_stride);
-    }
-
-    void gen_ker32x32_in_16x16(int i_off, int o_off, int input_stride,
-            int output_stride, int in_tail, int out_tail) {
-
-        constexpr auto lane = 32;
-        constexpr auto sub_lane = lane / 2;
-        auto tail = in_tail != lane ? in_tail : out_tail;
-
-        const auto l_tail = tail < sub_lane ? tail : sub_lane;
-        const auto u_tail = tail < sub_lane ? 0 : tail - sub_lane;
-
-        if (tail == in_tail) {
-            gen_ker16x16_in_8x8(i_off, o_off, input_stride, output_stride,
-                    l_tail, sub_lane);
-            gen_ker16x16_in_8x8(i_off + sub_lane * input_stride,
-                    o_off + sub_lane, input_stride, output_stride, l_tail,
-                    sub_lane);
-            gen_ker16x16_in_8x8(i_off + sub_lane,
-                    o_off + output_stride * sub_lane, input_stride,
-                    output_stride, u_tail, sub_lane);
-            gen_ker16x16_in_8x8(i_off + input_stride * sub_lane + sub_lane,
-                    o_off + output_stride * sub_lane + sub_lane, input_stride,
-                    output_stride, u_tail, sub_lane);
-        } else {
-            gen_ker16x16_in_8x8(i_off, o_off, input_stride, output_stride,
-                    sub_lane, l_tail);
-            gen_ker16x16_in_8x8(i_off + sub_lane * input_stride,
-                    o_off + sub_lane, input_stride, output_stride, sub_lane,
-                    u_tail);
-            gen_ker16x16_in_8x8(i_off + sub_lane,
-                    o_off + output_stride * sub_lane, input_stride,
+            gen_tr8x8(sub_lane * itype_sz_,
+                    output_stride * sub_lane * itype_sz_, input_stride,
                     output_stride, sub_lane, l_tail);
-            gen_ker16x16_in_8x8(i_off + input_stride * sub_lane + sub_lane,
-                    o_off + output_stride * sub_lane + sub_lane, input_stride,
-                    output_stride, sub_lane, u_tail);
-        }
-    }
-
-    void gen_ker64x64_in_32x32(
-            int i_off, int o_off, int input_stride, int output_stride) {
-
-        const auto lane = 64;
-        const auto sub_lane = lane / 2;
-        gen_ker32x32_in_16x16(i_off, o_off, input_stride, output_stride);
-        gen_ker32x32_in_16x16(i_off + sub_lane * input_stride, o_off + sub_lane,
-                input_stride, output_stride);
-        gen_ker32x32_in_16x16(i_off + sub_lane,
-                o_off + output_stride * sub_lane, input_stride, output_stride);
-        gen_ker32x32_in_16x16(i_off + input_stride * sub_lane + sub_lane,
-                o_off + output_stride * sub_lane + sub_lane, input_stride,
-                output_stride);
-    }
-
-    void gen_ker64x64_in_32x32(int i_off, int o_off, int input_stride,
-            int output_stride, int in_tail, int out_tail) {
-        constexpr auto lane = 64;
-        constexpr auto sub_lane = lane / 2;
-        auto tail = in_tail != lane ? in_tail : out_tail;
-
-        const auto l_tail = tail < sub_lane ? tail : sub_lane;
-        const auto u_tail = tail < sub_lane ? 0 : tail - sub_lane;
-
-        if (tail == in_tail) {
-            gen_ker32x32_in_16x16(i_off, o_off, input_stride, output_stride,
-                    l_tail, sub_lane);
-            gen_ker32x32_in_16x16(i_off + sub_lane * input_stride,
-                    o_off + sub_lane, input_stride, output_stride, l_tail,
-                    sub_lane);
-            gen_ker32x32_in_16x16(i_off + sub_lane,
-                    o_off + output_stride * sub_lane, input_stride,
-                    output_stride, u_tail, sub_lane);
-            gen_ker32x32_in_16x16(i_off + input_stride * sub_lane + sub_lane,
-                    o_off + output_stride * sub_lane + sub_lane, input_stride,
-                    output_stride, u_tail, sub_lane);
-        } else {
-            gen_ker32x32_in_16x16(i_off, o_off, input_stride, output_stride,
-                    sub_lane, l_tail);
-            gen_ker32x32_in_16x16(i_off + sub_lane * input_stride,
-                    o_off + sub_lane, input_stride, output_stride, sub_lane,
-                    u_tail);
-            gen_ker32x32_in_16x16(i_off + sub_lane,
-                    o_off + output_stride * sub_lane, input_stride,
-                    output_stride, sub_lane, l_tail);
-            gen_ker32x32_in_16x16(i_off + input_stride * sub_lane + sub_lane,
-                    o_off + output_stride * sub_lane + sub_lane, input_stride,
-                    output_stride, sub_lane, u_tail);
+            gen_tr8x8(itype_sz_ * (input_stride * sub_lane + sub_lane),
+                    otype_sz_ * (output_stride * sub_lane + sub_lane),
+                    input_stride, output_stride, sub_lane, u_tail);
         }
     }
 
@@ -2498,8 +2341,6 @@ private:
     /* Avoid P_TMP(p7) in jit_generator.hpp. */
     PReg p_lsb_256 = p6;
     PReg p_mask = p5;
-    PReg p_tmp1 = p4;
-    PReg p_tmp2 = p3;
 
     ZRegS ymm_tmp = z0.s;
     ZRegS ymm_src_zp = z14.s;
@@ -2524,7 +2365,6 @@ private:
 
 status_t kernel_t::desc_init(
         kernel_t::desc_t &desc, const prb_t &prb, int ndims_ker_max) {
-
     desc.prb = prb;
     desc.prb.ioff = desc.prb.ooff = 0;
 
@@ -2736,10 +2576,9 @@ static void prb_thread_kernel_balance(
 
     if (want_borrow_ker_from_drv || want_borrow_drv_from_ker) {
         DEBUG({
-            verbose_printf(
-                    verbose_t::debuginfo, "split: %s\n", prb_dump(prb).c_str());
-            verbose_printf(verbose_t::debuginfo, "ndims_ker_max = %d\n",
-                    ndims_ker_max);
+            printf("split: ");
+            prb_dump(prb);
+            printf("ndims_ker_max = %d\n", ndims_ker_max);
         });
     }
 }
@@ -2804,8 +2643,8 @@ status_t jit_uni_reorder_t::pd_t::create(reorder_pd_t **reorder_pd,
 
     prb_block_for_cache(prb);
     DEBUG({
-        verbose_printf(
-                verbose_t::debuginfo, "cache: %s\n", prb_dump(prb).c_str());
+        printf("cache: ");
+        prb_dump(prb);
     });
 
     int ndims_ker_max {};
@@ -2824,8 +2663,8 @@ status_t jit_uni_reorder_t::pd_t::create(reorder_pd_t **reorder_pd,
         return status::unimplemented;
 
     DEBUG({
-        verbose_printf(verbose_t::debuginfo, "ker  : %s\n",
-                prb_dump(ker_desc.prb).c_str());
+        printf("ker  : ");
+        prb_dump(ker_desc.prb);
     });
 
     auto _pd = make_unique_pd<pd_t>(
@@ -3034,12 +2873,12 @@ void jit_uni_reorder_t::omp_driver(const char *in, char *out,
     out += pd()->prb_.ooff * data_type_size(pd()->prb_.otype);
 
     DEBUG({
-        verbose_printf(verbose_t::debuginfo, "prb : %s\n",
-                tr::prb_dump(pd()->prb_).c_str());
+        printf("prb : ");
+        tr::prb_dump(pd()->prb_);
     });
     DEBUG({
-        verbose_printf(verbose_t::debuginfo, "ker : %s\n",
-                tr::prb_dump(pd()->ker_desc_.prb).c_str());
+        printf("ker : ");
+        tr::prb_dump(pd()->ker_desc_.prb);
     });
 
     int ndims = pd()->prb_.ndims;
@@ -3200,6 +3039,7 @@ status_t jit_uni_reorder_t::init(engine_t *engine) {
 
 status_t jit_uni_reorder_t::execute(const exec_ctx_t &ctx) const {
     const auto &scratchpad = ctx.get_scratchpad_grantor();
+
     auto in = CTX_IN_MEM(const char *, DNNL_ARG_FROM);
     auto out = CTX_OUT_MEM(char *, DNNL_ARG_TO);
     DEFINE_ARG_SCALES_BUFFER(src_scales, DNNL_ARG_SRC);
@@ -3224,16 +3064,6 @@ status_t jit_blk_reorder_t::pd_t::create(reorder_pd_t **reorder_pd,
     if (!impl::is_dense_format_kind({src_md, dst_md}))
         return status::unimplemented;
     auto prb = tr::prb_t();
-    // For shapes with dimension greater than thres it is found that jit:uni is better that jit:blk
-    auto thres = 1920 * 4096;
-    auto src_d = memory_desc_wrapper(src_md);
-    auto prd = 1;
-
-    for (int d = 0; d < src_d.ndims(); ++d) {
-        const auto dim = src_d.dims()[d];
-        prd *= dim;
-        if (prd > thres) return status::unimplemented;
-    }
 
     status_t prb_init_status = prb_init(prb, *src_md, *dst_md, attr);
     if (prb_init_status != status::success) return prb_init_status;
@@ -3243,8 +3073,8 @@ status_t jit_blk_reorder_t::pd_t::create(reorder_pd_t **reorder_pd,
 
     prb_tile_normalize(prb);
     DEBUG({
-        verbose_printf(
-                verbose_t::debuginfo, "tile : %s\n", prb_dump(prb).c_str());
+        printf("tile : ");
+        prb_dump(prb);
     });
 
     if (!tr::jit_single_blk_kernel_t::applicable(prb)) {
@@ -3262,8 +3092,8 @@ status_t jit_blk_reorder_t::pd_t::create(reorder_pd_t **reorder_pd,
 }
 
 void jit_blk_reorder_t::pd_t::prb_tile_normalize(tr::prb_t &p) {
-    if (!utils::one_of(p.nodes[0].n, 8ul, 16ul, 32ul, 64ul)
-            && utils::one_of(p.nodes[1].n, 8ul, 16ul, 32ul, 64ul)) {
+    if (!utils::one_of(p.nodes[0].n, 8ul, 16ul)
+            && utils::one_of(p.nodes[1].n, 8ul, 16ul)) {
         nstl::swap(p.nodes[0], p.nodes[1]);
     }
 }

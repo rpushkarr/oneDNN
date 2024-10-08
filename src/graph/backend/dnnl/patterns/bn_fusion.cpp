@@ -15,7 +15,7 @@
 *******************************************************************************/
 
 #include "graph/backend/dnnl/internal_ops.hpp"
-#include "graph/backend/dnnl/kernels/batch_norm.hpp"
+#include "graph/backend/dnnl/kernels/batchnorm.hpp"
 #include "graph/backend/dnnl/patterns/fusions.hpp"
 #include "graph/backend/dnnl/patterns/pattern_matcher_pass.hpp"
 #include "graph/backend/dnnl/patterns/utils.hpp"
@@ -49,7 +49,7 @@ DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, bn_relu_fusion)
                             graph::op_kind::ReLU, {in_edge(0, bn, 0)});
                 })
         .set_attr<FCreateKernel>("FCreateKernel", []() -> kernel_ptr {
-            return std::make_shared<batch_norm_fwd_t>();
+            return std::make_shared<batchnorm_fwd_t>();
         });
 
 DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, int8_bn_fusion)
@@ -95,7 +95,7 @@ DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, int8_bn_fusion)
                             check_output_dtype<impl::data_type::s8>);
                 })
         .set_attr<FCreateKernel>("FCreateKernel", []() -> kernel_ptr {
-            return std::make_shared<batch_norm_fwd_t>();
+            return std::make_shared<batchnorm_fwd_t>();
         });
 
 #define BATCHNORM_OUTPUT_NUM_CHECK(n1, n2) \
@@ -104,7 +104,6 @@ DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, int8_bn_fusion)
                 || check_output_num<n2>(graph_op); \
     })
 
-#if BUILD_TRAINING
 DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, bn_bwd_relu_bwd_fusion)
         .set_priority(8.8f)
         .set_kind(partition_kind_t::misc_post_ops)
@@ -121,9 +120,8 @@ DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, bn_bwd_relu_bwd_fusion)
                     bn_bwd->BATCHNORM_OUTPUT_NUM_CHECK(1, 3);
                 })
         .set_attr<FCreateKernel>("FCreateKernel", []() -> kernel_ptr {
-            return std::make_shared<batch_norm_bwd_t>();
+            return std::make_shared<batchnorm_bwd_t>();
         });
-#endif
 
 DNNL_BACKEND_REGISTER_PATTERN_DEF_END
 

@@ -1,6 +1,6 @@
 /*******************************************************************************
-* Copyright 2019-2024 Intel Corporation
-* Copyright 2020-2024 FUJITSU LIMITED
+* Copyright 2019-2023 Intel Corporation
+* Copyright 2020 FUJITSU LIMITED
 * Copyright 2022 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -54,8 +54,6 @@ const std::map<pk_impl_key_t, std::vector<impl_list_item_t>> &impl_list_map() {
         {{forward}, {
             /* fp */
             CPU_INSTANCE_X64(jit_uni_pooling_fwd_t<avx512_core_fp16, f16>)
-            CPU_INSTANCE_X64(jit_uni_pooling_fwd_t<avx512_core_fp16, f8_e5m2>)
-            CPU_INSTANCE_X64(jit_uni_pooling_fwd_t<avx512_core_fp16, f8_e4m3>)
             CPU_INSTANCE_X64(jit_uni_pooling_fwd_t<avx512_core, bf16>)
             CPU_INSTANCE_X64(jit_uni_pooling_fwd_t<avx512_core, f32>)
             CPU_INSTANCE_X64(jit_uni_pooling_fwd_t<avx2_vnni_2, bf16>)
@@ -64,24 +62,17 @@ const std::map<pk_impl_key_t, std::vector<impl_list_item_t>> &impl_list_map() {
             CPU_INSTANCE_X64(jit_uni_pooling_fwd_t<avx, f32>)
             CPU_INSTANCE_X64(jit_uni_pooling_fwd_t<sse41, f32>)
             CPU_INSTANCE_AARCH64(jit_uni_pooling_fwd_t<sve_512, f32>)
-            CPU_INSTANCE_AARCH64(jit_uni_pooling_fwd_t<sve_256, f32>)
             CPU_INSTANCE_AARCH64_ACL(acl_pooling_fwd_t)
             CPU_INSTANCE_RV64GCV(riscv_nchw_pooling_fwd_t<f32>)
             CPU_INSTANCE(nchw_pooling_fwd_t<bf16>)
             CPU_INSTANCE(nchw_pooling_fwd_t<f32>)
             CPU_INSTANCE(nchw_pooling_fwd_t<f16>)
-            CPU_INSTANCE(nchw_pooling_fwd_t<f8_e5m2>)
-            CPU_INSTANCE(nchw_pooling_fwd_t<f8_e4m3>)
             CPU_INSTANCE(nhwc_pooling_fwd_t<bf16>)
             CPU_INSTANCE(nhwc_pooling_fwd_t<f32>)
             CPU_INSTANCE(nhwc_pooling_fwd_t<f16>)
-            CPU_INSTANCE(nhwc_pooling_fwd_t<f8_e5m2>)
-            CPU_INSTANCE(nhwc_pooling_fwd_t<f8_e4m3>)
             CPU_INSTANCE(ref_pooling_fwd_t<f32>)
             CPU_INSTANCE(ref_pooling_fwd_t<bf16, f32>)
             CPU_INSTANCE(ref_pooling_fwd_t<f16, f32>)
-            CPU_INSTANCE(ref_pooling_fwd_t<f8_e5m2, f32>)
-            CPU_INSTANCE(ref_pooling_fwd_t<f8_e4m3, f32>)
             /* int */
             CPU_INSTANCE_X64(jit_uni_i8i8_pooling_fwd_t<avx512_core>)
             CPU_INSTANCE_X64(jit_uni_i8i8_pooling_fwd_t<avx2>)
@@ -100,7 +91,6 @@ const std::map<pk_impl_key_t, std::vector<impl_list_item_t>> &impl_list_map() {
             CPU_INSTANCE_X64(jit_uni_pooling_bwd_t<avx, f32>)
             CPU_INSTANCE_X64(jit_uni_pooling_bwd_t<sse41, f32>)
             CPU_INSTANCE_AARCH64(jit_uni_pooling_bwd_t<sve_512, f32>)
-            CPU_INSTANCE_AARCH64(jit_uni_pooling_bwd_t<sve_256, f32>)
             CPU_INSTANCE(nchw_pooling_bwd_t<bf16>)
             CPU_INSTANCE(nchw_pooling_bwd_t<f32>)
             CPU_INSTANCE(nchw_pooling_bwd_t<f16>)

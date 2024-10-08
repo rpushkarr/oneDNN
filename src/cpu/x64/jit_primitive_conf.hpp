@@ -166,7 +166,6 @@ struct jit_conv_conf_t {
     data_type_t ddst_dt;
     data_type_t dsrc_dt;
     data_type_t dwei_dt;
-    bool is_bf32 {false};
     bool expl_bcast;
     bool large_spatial, large_w_filter;
     int is_ic_scale, is_oc_scale;
@@ -512,7 +511,6 @@ struct jit_pool_conf_t {
     int dt_size;
     bool is_bf16;
     bool is_f16;
-    bool is_fp8;
     jit_memory_tag_kind_t tag_kind;
     bool is_plain() const {
         return (tag_kind == jit_memory_tag_kind_t::ncsp
@@ -793,8 +791,6 @@ struct jit_brgemm_conv_conf_t {
     bool req_brg_comp_pad;
     bool req_cal_comp_pad;
     bool is_bf32;
-    bool is_fp8 {false};
-    bool is_fp8_convert {false};
     bool comp_with_vpads;
 
     int nthr_mb, nthr_g, nthr_oc_b, nthr_ic_b, nthr_oh;

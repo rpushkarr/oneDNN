@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2024 Intel Corporation
+* Copyright 2019-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -223,8 +223,6 @@ protected:
                 tag, dnnl_abc, dnnl_abcd, dnnl_acb, dnnl_acdb);
     }
     void SetUp() override {
-        SKIP_IF_HIP(
-                true, "Resampling operator is not supported by hip backend");
         p = ::testing::TestWithParam<decltype(p)>::GetParam();
         SKIP_IF_CUDA(p.aalgorithm == algorithm::resampling_nearest,
                 "nearet algorithm is not supported for cudnn backend");

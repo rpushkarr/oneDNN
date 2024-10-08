@@ -24,12 +24,14 @@
 find_path(ACL_INCLUDE_DIR
   NAMES arm_compute/graph.h
   PATHS ENV ACL_ROOT_DIR
+  NO_DEFAULT_PATH
   )
 
 find_library(ACL_LIBRARY
   NAMES arm_compute
   PATHS ENV ACL_ROOT_DIR
-  PATH_SUFFIXES lib build
+  PATH_SUFFIXES build
+  NO_DEFAULT_PATH
   )
 
 include(FindPackageHandleStandardArgs)
@@ -54,7 +56,7 @@ if(ACL_FOUND)
   find_library(ACL_GRAPH_LIBRARY
     NAMES arm_compute_graph
     PATHS ENV ACL_ROOT_DIR
-    PATH_SUFFIXES lib build
+    PATH_SUFFIXES build
     )
 
   list(APPEND ACL_INCLUDE_DIRS

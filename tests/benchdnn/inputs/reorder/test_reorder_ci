@@ -10,7 +10,7 @@
 --stag=abx
 --dtag=abx,axb,xba
 --oflag=
-2x16x3x4 1x17x5x3 30x1
+2x16x3x4 1x17x5x3
 
 --reset
 # compensation reorders without groups
@@ -43,11 +43,3 @@
               src:per_dim_1+dst:common:2, \
               src:common:4+dst:per_dim_1
 2x16x3x4
-
-# int4 cases
---reset
---batch=test_reorder_int4
-
-# fp4 cases
---reset
---batch=test_reorder_fp4

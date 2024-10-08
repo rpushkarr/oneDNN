@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2024 Intel Corporation
+* Copyright 2016-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -26,10 +26,6 @@
     VCONDCHECK(primitive, create, dispatch, softmax, (cond), \
             status::unimplemented, "%s," msg, this->info(engine), \
             ##__VA_ARGS__)
-
-#define VDISPATCH_SOFTMAX_SC(f, msg, ...) \
-    VCHECK(primitive, create, dispatch, softmax, (f), "%s," msg, \
-            this->info(engine), ##__VA_ARGS__)
 
 namespace dnnl {
 namespace impl {
@@ -81,6 +77,10 @@ struct softmax_pd_t : public primitive_desc_t {
                 dst_desc().dims + axis() + 1, ndims() - 1 - axis());
     }
 
+    dim_t outer_stride() const {
+        const memory_desc_wrapper dst_d(dst_desc());
+        return axis() > 0 ? dst_d.blocking_desc().strides[axis() - 1] : 1;
+    }
     dim_t axis_stride() const {
         const memory_desc_wrapper dst_d(dst_desc());
         return dst_d.blocking_desc().strides[axis()];

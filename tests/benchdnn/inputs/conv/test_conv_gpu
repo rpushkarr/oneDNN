@@ -37,6 +37,7 @@
 --dir=FWD_B
 --batch=set_gpu
 
+# bf16
 --dt=bf16,f32:bf16:bf16
 --mb=2,16
 --dir=BWD_D
@@ -141,14 +142,6 @@ mb128ic3ih230oc64oh112kh7sh2ph0
 --batch=shapes_mobilenet_dw
 
 --batch=harness_conv_arbitrary_dst
-
-# Test CI in Nightly
---reset
---batch=test_conv_gpu_ci
-
-# Test zero points
---reset
---batch=harness_conv_zero_points
 
 # Test layers of some key GPU DL Frameworks
 --reset

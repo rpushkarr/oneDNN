@@ -18,7 +18,6 @@
 #include <string.h>
 
 #include "common.hpp"
-#include "dnn_types.hpp"
 #include "dnnl_common.hpp"
 #include "dnnl_memory.hpp"
 #include "utils/parser.hpp"
@@ -83,16 +82,6 @@ static int check_attr2str() {
             "--attr-zero-points=wei:per_dim_1:s8 ");
 
     attr = attr_t();
-    attr.scales.set(DNNL_ARG_SRC_0,
-            attr_t::arg_scales_t::entry_t(
-                    policy_t::PER_OC, 2.3f, dnnl_bf16, {}));
-    attr.zero_points.set(
-            DNNL_ARG_WEIGHTS, {policy_t::PER_OCIC, 2, dnnl_s8, {4, 1}});
-    SELF_CHECK_PRINT_EQ(attr,
-            "--attr-scales=src:per_oc:bf16 "
-            "--attr-zero-points=wei:per_ocic:s8:4x1 ");
-
-    attr = attr_t();
     attr.fpmath_mode.set(dnnl_fpmath_mode_strict, true);
     SELF_CHECK_PRINT_EQ(attr, "--attr-fpmath=strict:true ");
     attr.fpmath_mode.set(dnnl_fpmath_mode_bf16, false);
@@ -102,43 +91,31 @@ static int check_attr2str() {
 }
 
 static int check_attr() {
-#define SELF_CHECK_ATTR_ZP(zp, arg, zero_points_policy, zero_points_value, \
-        zero_points_data_type, zero_points_groups) \
+#define SELF_CHECK_ATTR_ZP(zp, arg, zero_points_policy, zero_points_value) \
     do { \
         const auto &entry = (zp).get(arg); \
         SELF_CHECK_EQ(entry.policy, zero_points_policy); \
         SELF_CHECK_EQ(entry.value, zero_points_value); \
-        SELF_CHECK_EQ(entry.dt, zero_points_data_type); \
-        for (size_t i = 0; i < (zero_points_groups).size(); ++i) \
-            SELF_CHECK_EQ(entry.groups[i], (zero_points_groups)[i]); \
     } while (0)
 
-    static base_settings_t def;
     {
-        base_settings_t s;
-        std::vector<attr_t::zero_points_t> &zp = s.zero_points;
-        SELF_CHECK_EQ(parse_attributes(s, def,
+        std::vector<attr_t::zero_points_t> zp;
+        SELF_CHECK_EQ(parse_attr_zero_points(zp,
                               "--attr-zero-points=src:common:0+wei:per_oc+dst:"
                               "common:-2,src:per_dim_1"),
                 true);
         SELF_CHECK_EQ(zp.size(), 2);
-        const std::vector<dnnl_dim_t> def_g {};
-        SELF_CHECK_ATTR_ZP(
-                zp[0], DNNL_ARG_SRC, policy_t::COMMON, 0, dnnl_s32, def_g);
-        SELF_CHECK_ATTR_ZP(
-                zp[0], DNNL_ARG_WEIGHTS, policy_t::PER_OC, 0, dnnl_s32, def_g);
-        SELF_CHECK_ATTR_ZP(
-                zp[0], DNNL_ARG_DST, policy_t::COMMON, -2, dnnl_s32, def_g);
+        SELF_CHECK_ATTR_ZP(zp[0], DNNL_ARG_SRC, policy_t::COMMON, 0);
+        SELF_CHECK_ATTR_ZP(zp[0], DNNL_ARG_WEIGHTS, policy_t::PER_OC, 0);
+        SELF_CHECK_ATTR_ZP(zp[0], DNNL_ARG_DST, policy_t::COMMON, -2);
 
-        SELF_CHECK_ATTR_ZP(
-                zp[1], DNNL_ARG_SRC, policy_t::PER_DIM_1, 0, dnnl_s32, def_g);
+        SELF_CHECK_ATTR_ZP(zp[1], DNNL_ARG_SRC, policy_t::PER_DIM_1, 0);
     }
 
     {
-        base_settings_t s;
-        std::vector<attr_t::arg_scales_t> &sc = s.scales;
+        std::vector<attr_t::arg_scales_t> sc;
         // `src` scale is overridden with the latter value.
-        SELF_CHECK_EQ(parse_attributes(s, def,
+        SELF_CHECK_EQ(parse_attr_scales(sc,
                               "--attr-scales=src:common:1.5+wei:per_oc+src:"
                               "common:0.5"),
                 true);
@@ -150,9 +127,8 @@ static int check_attr() {
     }
 
     {
-        base_settings_t s;
-        std::vector<attr_t::arg_scales_t> &sc = s.scales;
-        SELF_CHECK_EQ(parse_attributes(s, def,
+        std::vector<attr_t::arg_scales_t> sc;
+        SELF_CHECK_EQ(parse_attr_scales(sc,
                               "--attr-scales=src:common:2.5+src1:common:1.5"),
                 true);
         SELF_CHECK_EQ(sc.size(), 1);
@@ -163,22 +139,9 @@ static int check_attr() {
     }
 
     {
-        base_settings_t s;
-        std::vector<attr_t::zero_points_t> &zp = s.zero_points;
-        SELF_CHECK_EQ(parse_attributes(
-                              s, def, "--attr-zero-points=wei:per_ocic:s8:2x1"),
-                true);
-        SELF_CHECK_EQ(zp.size(), 1);
-        std::vector<dnnl_dim_t> groups = {2, 1};
-        SELF_CHECK_ATTR_ZP(zp[0], DNNL_ARG_WEIGHTS, policy_t::PER_OCIC, 0,
-                dnnl_s8, groups);
-    }
-
-    {
-        base_settings_t s;
-        std::vector<attr_t::arg_scales_t> &sc = s.scales;
-        SELF_CHECK_EQ(parse_attributes(s, def,
-                              "--attr-scales=attr_post_op_dw_wei:common:2"),
+        std::vector<attr_t::arg_scales_t> sc;
+        SELF_CHECK_EQ(parse_attr_scales(
+                              sc, "--attr-scales=attr_post_op_dw_wei:common:2"),
                 true);
         SELF_CHECK_EQ(sc.size(), 1);
         const auto arg = DNNL_ARG_ATTR_POST_OP_DW | DNNL_ARG_WEIGHTS;
@@ -188,9 +151,8 @@ static int check_attr() {
 
     // depthwise conv section
     {
-        base_settings_t s;
-        std::vector<attr_t::post_ops_t> &po = s.post_ops;
-        auto st = parse_attributes(s, def, "--attr-post-ops=dw:k3s1p1");
+        std::vector<attr_t::post_ops_t> po;
+        auto st = parse_attr_post_ops(po, "--attr-post-ops=dw:k3s1p1");
         SELF_CHECK_EQ(st, true);
         SELF_CHECK_EQ(po[0].len(), 1);
         const auto &e = po[0].entry[0];
@@ -203,10 +165,9 @@ static int check_attr() {
     }
 
     {
-        base_settings_t s;
-        std::vector<attr_t::post_ops_t> &po = s.post_ops;
-        auto st = parse_attributes(
-                s, def, "--attr-post-ops=relu:0.5+dw:k3s2p1:s8+linear:2:1");
+        std::vector<attr_t::post_ops_t> po;
+        auto st = parse_attr_post_ops(
+                po, "--attr-post-ops=relu:0.5+dw:k3s2p1:s8+linear:2:1");
         SELF_CHECK_EQ(st, true);
         SELF_CHECK_EQ(po[0].len(), 3);
         auto &e = po[0].entry[0];
@@ -233,75 +194,31 @@ static int check_attr() {
     }
 
     {
-        base_settings_t s;
-        std::vector<attr_t::fpmath_mode_t> &fm = s.fpmath_mode;
-        auto st = parse_attributes(s, def, "--attr-fpmath=strict:true");
+        std::vector<attr_t::fpmath_mode_t> fm, fm_def;
+        auto st = parse_attr_fpmath_mode(
+                fm, fm_def, "--attr-fpmath=strict:true");
         SELF_CHECK_EQ(st, true);
         SELF_CHECK_EQ(fm[0].mode, dnnl_fpmath_mode_strict);
         SELF_CHECK_EQ(fm[0].apply_to_int, true);
     }
 
     {
-        base_settings_t s;
-        std::vector<attr_t::fpmath_mode_t> &fm = s.fpmath_mode;
-        auto st = parse_attributes(s, def, "--attr-fpmath=bf16");
+        std::vector<attr_t::fpmath_mode_t> fm, fm_def;
+        auto st = parse_attr_fpmath_mode(fm, fm_def, "--attr-fpmath=bf16");
         SELF_CHECK_EQ(st, true);
         SELF_CHECK_EQ(fm[0].mode, dnnl_fpmath_mode_bf16);
         SELF_CHECK_EQ(fm[0].apply_to_int, false);
     }
 
     {
-        base_settings_t s;
         // Updating the default values and expect them to be returned.
-        std::vector<attr_t::fpmath_mode_t> &fm = s.fpmath_mode;
-        def.fpmath_mode.emplace_back();
-        def.fpmath_mode[0].set(dnnl_fpmath_mode_bf16, true);
-        auto st = parse_attributes(s, def, "--attr-fpmath=");
+        std::vector<attr_t::fpmath_mode_t> fm, fm_def;
+        fm_def.emplace_back();
+        fm_def[0].set(dnnl_fpmath_mode_bf16, true);
+        auto st = parse_attr_fpmath_mode(fm, fm_def, "--attr-fpmath=");
         SELF_CHECK_EQ(st, true);
         SELF_CHECK_EQ(fm[0].mode, dnnl_fpmath_mode_bf16);
         SELF_CHECK_EQ(fm[0].apply_to_int, true);
-        // Reset default settings
-        def = base_settings_t();
-    }
-
-    {
-        base_settings_t s;
-        std::vector<attr_t::dropout_t> &d = s.dropout;
-        auto st = parse_attributes(s, def, "--attr-dropout=0.5:12345:axb");
-        SELF_CHECK_EQ(st, true);
-        SELF_CHECK_EQ(d[0].p, 0.5f);
-        SELF_CHECK_EQ(d[0].seed, 12345);
-        SELF_CHECK_CASE_STR_EQ(d[0].tag.c_str(), tag::axb);
-    }
-
-    {
-        base_settings_t s;
-        std::vector<attr_t::dropout_t> &d = s.dropout;
-        auto st = parse_attributes(s, def, "--attr-dropout=0.75");
-        SELF_CHECK_EQ(st, true);
-        SELF_CHECK_EQ(d[0].p, 0.75f);
-        SELF_CHECK_EQ(d[0].seed, 0);
-        SELF_CHECK_CASE_STR_EQ(d[0].tag.c_str(), tag::any);
-    }
-
-    {
-        base_settings_t s;
-        std::vector<attr_t::dropout_t> &d = s.dropout;
-        auto st = parse_attributes(s, def, "--attr-dropout=");
-        SELF_CHECK_EQ(st, true);
-        SELF_CHECK_EQ(d[0].p, 0.f);
-        SELF_CHECK_EQ(d[0].seed, 0);
-        SELF_CHECK_CASE_STR_EQ(d[0].tag.c_str(), tag::any);
-    }
-
-    {
-        base_settings_t s;
-        std::vector<attr_t::rounding_mode_t> &rm = s.rounding_mode;
-        auto st = parse_attributes(
-                s, def, "--attr-rounding-mode=dst:stochastic");
-        SELF_CHECK_EQ(st, true);
-        SELF_CHECK_EQ(rm[0].get(DNNL_ARG_DST), dnnl_rounding_mode_stochastic);
-        SELF_CHECK_EQ(rm[0].get(DNNL_ARG_SRC), dnnl_rounding_mode_environment);
     }
 
 #undef SELF_CHECK_ATTR_ZP

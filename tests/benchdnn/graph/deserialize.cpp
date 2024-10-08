@@ -20,7 +20,6 @@
 #include <map>
 #include <numeric>
 #include <queue>
-#include <sstream>
 #include <stdexcept>
 
 #include "deserialize.hpp"
@@ -134,7 +133,10 @@ void deserialized_op::load(utils::json::json_reader_t *reader) {
 
 op deserialized_op::create() const {
     op aop(id_, opstr2kind(kind_), name_);
-    for (auto it = attrs_.begin(); it != attrs_.end(); ++it) {
+    for (typename std::unordered_map<std::string,
+                 deserialized_attr>::const_iterator it
+            = attrs_.begin();
+            it != attrs_.end(); ++it) {
         const auto &attr = attrstr2kind(it->first);
         const auto &attr_value = it->second;
         const auto &type = attr_value.type_;
@@ -239,6 +241,8 @@ logical_tensor::dims deserialized_op::get_NCX_shape(
 
 void deserialized_graph::load(const std::string &pass_config_json) {
     std::ifstream fs(pass_config_json.c_str());
+    BENCHDNN_PRINT(
+            1, "Deserializing graph from %s\n", pass_config_json.c_str());
     utils::json::json_reader_t read(&fs);
     utils::json::read_helper_t helper;
     helper.declare_field("graph", &ops_);
@@ -252,30 +256,13 @@ void deserialized_graph::load(const std::string &pass_config_json) {
     if (ops_.empty()) {
         BENCHDNN_PRINT(
                 0, "Error: Graph %s is empty.\n", pass_config_json.c_str());
-        SAFE_V(FAIL);
+        exit(2);
     }
 
-    // Original graph int8 cases come with close-to-real-world values of scales.
-    // They are typically f32 random real numbers which doesn't help to validate
-    // correctness due to rounding issues in lower precision data types.
-    // To work around potential rounding, the code below rounds scales from the
-    // case to the nearest pow2 value. E.g. 0.2438485 -> 0.25.
-    // Note: it must be done before `ops` are put into `ops_map`.
-    for (auto &aop : ops_) {
-        if (aop.kind_ != "Dequantize" && aop.kind_ != "Quantize") continue;
-
-        const auto it_attr_scales = aop.attrs_.find("scales");
-        const bool has_scales = it_attr_scales != aop.attrs_.end();
-        if (!has_scales) continue;
-
-        auto &f32_vector = it_attr_scales->second.f32_vector_;
-        for (size_t i = 0; i < f32_vector.size(); i++) {
-            const int64_t p
-                    = static_cast<int64_t>(std::ceil(std::log2(f32_vector[i])));
-            const float new_scale = p >= 0 ? (1LL << p) : (1.f / (1LL << -p));
-            f32_vector[i] = new_scale;
-        }
-    }
+    BENCHDNN_PRINT(1,
+            "The graph was serialized with oneDNN Graph v%s on %s engine "
+            "with %s fpmath mode.\n",
+            version_.c_str(), engine_kind_.c_str(), fpmath_mode_.c_str());
 
     std::map<size_t, size_t> deg; // record indegree for each op
     std::map<size_t, deserialized_op> ops_map; // op_id -> op
@@ -324,7 +311,7 @@ void deserialized_graph::load(const std::string &pass_config_json) {
     if (ops_map.size() != ops_.size()) {
         BENCHDNN_PRINT(0, "FAIL: the graph %s is not a DAG.\n",
                 pass_config_json.c_str());
-        SAFE_V(FAIL);
+        exit(2);
     }
 
     for (const auto &in_lt : in_lt_2_ops_) {
@@ -355,82 +342,6 @@ void deserialized_graph::load(const std::string &pass_config_json) {
     }
 }
 
-// Prints the lt in the plain string format: `(id):dt:shape`.
-std::ostream &operator<<(std::ostream &s, const deserialized_lt &dlt) {
-    s << "(" << dlt.id_ << "):" << dlt.data_type_ << ":"
-      << lt_dims2str(dlt.shape_);
-    return s;
-}
-
-std::string deserialized_lt::get_string() const {
-    std::stringstream ss;
-    ss << *this;
-    return ss.str();
-}
-
-// Prints the op in the plain string format:
-// {(id) OpKind}
-//     In: { lt0, lt1, ... }
-//     Out: { lt0, lt1, ... }
-//     Attrs: { Scales: { val0, ... } }  // <-- if any available.
-std::ostream &operator<<(std::ostream &s, const deserialized_op &dop) {
-    s << "{(" << dop.id_ << ") " << dop.kind_ << "}\n";
-
-    s << "    In: { ";
-    for (size_t i = 0; i < dop.in_lts_.size(); i++) {
-        s << dop.in_lts_[i];
-        if (i != dop.in_lts_.size() - 1) s << ",";
-        s << " ";
-    }
-    s << "}\n";
-
-    s << "    Out: { ";
-    for (size_t i = 0; i < dop.out_lts_.size(); i++) {
-        s << dop.out_lts_[i];
-        if (i != dop.out_lts_.size() - 1) s << ",";
-        s << " ";
-    }
-    s << "}\n";
-
-    const auto it_attr_scales = dop.attrs_.find("scales");
-    const bool has_scales = it_attr_scales != dop.attrs_.end();
-    if (has_scales) {
-        s << "    Attrs: { ";
-
-        const auto &scales_v = it_attr_scales->second.f32_vector_;
-        const auto size = scales_v.size();
-        std::string size_str = " (" + std::to_string(size) + ")";
-        s << "Scales" << (size > 1 ? size_str : "") << ": { ";
-        for (size_t i = 0; i < size; i++) {
-            s << scales_v[i];
-            if (i != size - 1) s << ",";
-            s << " ";
-        }
-        s << "} "; // Scales
-        s << "}\n"; // Attrs
-    }
-    return s;
-}
-
-std::string deserialized_op::get_string() const {
-    std::stringstream ss;
-    ss << *this;
-    return ss.str();
-}
-
-std::ostream &operator<<(std::ostream &s, const deserialized_graph &dg) {
-    for (const auto &op : dg.ops_) {
-        s << op;
-    }
-    return s;
-}
-
-std::string deserialized_graph::get_string() const {
-    std::stringstream ss;
-    ss << *this;
-    return ss.str();
-}
-
 dnnl::graph::graph deserialized_graph::to_graph(
         dnnl::fpmath_mode fpmath_mode) const {
     const auto &engine = get_graph_engine();
@@ -439,43 +350,12 @@ dnnl::graph::graph deserialized_graph::to_graph(
         try {
             g.add_op(aop.create());
         } catch (const dnnl::error &e) {
-            BENCHDNN_PRINT(0, "Error: Adding op %s failed: %s\n",
-                    aop.name_.c_str(), e.message);
-            SAFE_V(FAIL);
+            BENCHDNN_PRINT(0, "FAIL: add op %s failed: %s\n", aop.name_.c_str(),
+                    e.message);
+            exit(2);
         }
     }
     return g;
-}
-
-const deserialized_op &deserialized_graph::get_op(size_t id) const {
-    for (const auto &op : ops_) {
-        if (op.id_ == id) return op;
-    }
-    assert(!"Given id was not found in the deserialized graph.");
-    static deserialized_op dummy;
-    return dummy;
-}
-
-const deserialized_op &deserialized_graph::get_op_by_out_lt(
-        size_t out_lt_id) const {
-    for_(const auto &op : ops_)
-    for (const auto &out_lt : op.out_lts_) {
-        if (out_lt.id_ == out_lt_id) return op;
-    }
-
-    static deserialized_op dummy;
-    return dummy;
-}
-
-const deserialized_op &deserialized_graph::get_op_by_in_lt(
-        size_t in_lt_id) const {
-    for_(const auto &op : ops_)
-    for (const auto &in_lt : op.in_lts_) {
-        if (in_lt.id_ == in_lt_id) return op;
-    }
-
-    static deserialized_op dummy;
-    return dummy;
 }
 
 bool deserialized_graph::check_tensor_with_mb(size_t tensor_id) const {

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -23,53 +23,6 @@
 
 namespace graph = dnnl::impl::graph;
 namespace utils = dnnl::graph::tests::unit::utils;
-
-// primitive only support 2-5D data tensor for layernorm,
-TEST(test_layer_norm_execute, LayernormNDimCheck) {
-    graph::engine_t *engine = get_engine();
-
-    std::vector<std::vector<int64_t>> src_shapes {
-            {}, {2}, {2, 3, 4, 5, 6, 7}, {2, 3}};
-    std::vector<size_t> expected_partition_num {0, 0, 0, 1, 1};
-
-    graph::logical_tensor_t scale_lt
-            = utils::logical_tensor_init(1, graph::data_type::f32);
-    graph::logical_tensor_t shift_lt
-            = utils::logical_tensor_init(2, graph::data_type::f32);
-    graph::logical_tensor_t dst_lt
-            = utils::logical_tensor_init(3, graph::data_type::f32);
-    graph::logical_tensor_t mean_lt
-            = utils::logical_tensor_init(4, graph::data_type::f32);
-    graph::logical_tensor_t variance_lt
-            = utils::logical_tensor_init(5, graph::data_type::f32);
-
-    // the last ndim is DNNL_GRAPH_UNKNOWN_NDIMS
-    for (size_t i = 0; i < src_shapes.size() + 1; i++) {
-        graph::logical_tensor_t src_lt;
-        if (i == src_shapes.size())
-            // ndim is DNNL_GRAPH_UNKNOWN_NDIMS
-            src_lt = utils::logical_tensor_init(0, graph::data_type::f32);
-        else
-            src_lt = utils::logical_tensor_init(
-                    0, src_shapes[i], graph::data_type::f32);
-        graph::graph_t g(engine->kind());
-
-        graph::op_t layernorm_op(graph::op_kind::LayerNorm);
-        layernorm_op.add_input(src_lt);
-        layernorm_op.add_input(scale_lt);
-        layernorm_op.add_input(shift_lt);
-        layernorm_op.add_output(dst_lt);
-        layernorm_op.add_output(mean_lt);
-        layernorm_op.add_output(variance_lt);
-
-        ASSERT_EQ(g.add_op(&layernorm_op), graph::status::success);
-        g.finalize();
-
-        graph::pass::pass_base_ptr apass = get_pass("ln_pass");
-        apass->run(g);
-        ASSERT_EQ(g.get_num_partitions(), expected_partition_num[i]);
-    }
-}
 
 TEST(test_layer_norm_execute, LayernormTraining) {
     graph::engine_t *eng = get_engine();
@@ -425,7 +378,7 @@ TEST(test_layer_norm_execute, LayerNormBackwardFp32) {
     }
 }
 
-TEST(test_layer_norm_execute_subgraph_int8, LayernormTypecastQuant_CPU) {
+TEST(test_layer_norm_execute_subgraph_int8, LayernormTypecastQuant) {
     graph::engine_t *engine = get_engine();
     graph::stream_t *strm = get_stream();
     static auto isa = dnnl_get_effective_cpu_isa();

@@ -1,7 +1,7 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
-* Copyright 2020-2024 FUJITSU LIMITED
-* Copyright 2022-2024 Arm Ltd. and affiliates
+* Copyright 2020-2023 Intel Corporation
+* Copyright 2020 FUJITSU LIMITED
+* Copyright 2022 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -37,6 +37,8 @@
 #if DNNL_AARCH64_USE_ACL
 // For checking if fp16 isa is supported on the platform
 #include "arm_compute/core/CPP/CPPTypes.h"
+// For setting the number of threads for ACL
+#include "src/common/cpuinfo/CpuInfo.h"
 #endif
 #endif
 
@@ -115,8 +117,8 @@ bool has_data_type_support(data_type_t data_type) {
 #if defined(USE_CBLAS) && defined(BLAS_HAS_SBGEMM) && defined(__MMA__)
             return true;
 #endif
-#elif DNNL_AARCH64
-            return aarch64::mayiuse_bf16();
+#elif DNNL_AARCH64_USE_ACL
+            return arm_compute::CPUInfo::get().has_bf16();
 #else
             return false;
 #endif
@@ -206,7 +208,7 @@ unsigned get_num_cores() {
 #if DNNL_X64
     return x64::cpu().getNumCores(Xbyak::util::CoreLevel);
 #elif DNNL_AARCH64_USE_ACL
-    return aarch64::cpu().getNumCores(Xbyak_aarch64::util::CoreLevel);
+    return arm_compute::cpuinfo::num_threads_hint();
 #else
     return 1;
 #endif
@@ -263,7 +265,6 @@ int get_vector_register_size() {
     using namespace aarch64;
     if (mayiuse(asimd)) return cpu_isa_traits<asimd>::vlen;
     if (mayiuse(sve_512)) return cpu_isa_traits<sve_512>::vlen;
-    if (mayiuse(sve_256)) return cpu_isa_traits<sve_256>::vlen;
 #endif
     return 0;
 }

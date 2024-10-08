@@ -26,6 +26,7 @@
 #include "bit_cast.hpp"
 #include "c_types_map.hpp"
 #include "dnnl_traits.hpp"
+#include "math_utils.hpp"
 #include "memory_desc.hpp"
 #include "nstl.hpp"
 #include "utils.hpp"
@@ -45,14 +46,6 @@ status_t safe_ptr_assign(base_type *&lhs, derived_type *rhs) {
 
 template <typename base_type, typename derived_type>
 status_t safe_ptr_assign(std::unique_ptr<base_type> &lhs, derived_type *rhs) {
-    if (rhs == nullptr) return status::out_of_memory;
-    lhs.reset(rhs);
-    return status::success;
-}
-
-template <typename base_type, typename base_type_deleter, typename derived_type>
-status_t safe_ptr_assign(
-        std::unique_ptr<base_type, base_type_deleter> &lhs, derived_type *rhs) {
     if (rhs == nullptr) return status::out_of_memory;
     lhs.reset(rhs);
     return status::success;
@@ -90,8 +83,6 @@ namespace types {
 inline size_t data_type_size(data_type_t data_type) {
     using namespace data_type;
     switch ((int)data_type) {
-        case f4_e2m1: return sizeof(prec_traits<f4_e2m1>::type);
-        case e8m0: return sizeof(prec_traits<e8m0>::type);
         case f8_e5m2: return sizeof(prec_traits<f8_e5m2>::type);
         case f8_e4m3: return sizeof(prec_traits<f8_e4m3>::type);
         case f16: return sizeof(prec_traits<f16>::type);
@@ -102,58 +93,11 @@ inline size_t data_type_size(data_type_t data_type) {
         case s32: return sizeof(prec_traits<s32>::type);
         case s8: return sizeof(prec_traits<s8>::type);
         case u8: return sizeof(prec_traits<u8>::type);
-        case s4: return sizeof(prec_traits<s4>::type);
-        case u4: return sizeof(prec_traits<u4>::type);
         case boolean: return sizeof(prec_traits<boolean>::type);
         case data_type::undef:
         default: assert(!"unknown data_type");
     }
     return (size_t)-1; /* not supposed to be reachable */
-}
-
-inline size_t elements_to_bytes(data_type_t data_type, size_t count) {
-    using namespace data_type;
-    switch ((int)data_type) {
-        case s4:
-        case u4: return (count + 1) >> 1;
-        default: return data_type_size(data_type) * count;
-    }
-}
-
-inline size_t bytes_to_elements(data_type_t data_type, size_t bytes) {
-    using namespace data_type;
-    switch ((int)data_type) {
-        case s4:
-        case u4: return bytes * 2;
-        default: return utils::div_up(bytes, data_type_size(data_type));
-    }
-}
-
-template <typename T>
-inline T min_value(data_type_t data_type) {
-    using namespace data_type;
-#define CASE(x) \
-    case x: \
-        return static_cast<T>(nstl::numeric_limits<prec_traits<x>::type>::min())
-    switch (data_type) {
-        CASE(f4_e2m1);
-        CASE(e8m0);
-        CASE(f8_e5m2);
-        CASE(f8_e4m3);
-        CASE(f16);
-        CASE(bf16);
-        CASE(f32);
-        CASE(f64);
-        CASE(s32);
-        CASE(s8);
-        CASE(u8);
-        CASE(s4);
-        CASE(u4);
-        case data_type::undef:
-        default: assert(!"unknown data_type");
-    }
-    return static_cast<T>(0); /* not supposed to be reachable */
-#undef CASE
 }
 
 template <typename T>
@@ -163,19 +107,13 @@ inline T max_value(data_type_t data_type) {
     case x: \
         return static_cast<T>(nstl::numeric_limits<prec_traits<x>::type>::max())
     switch (data_type) {
-        CASE(f4_e2m1);
-        CASE(e8m0);
         CASE(f8_e5m2);
         CASE(f8_e4m3);
         CASE(f16);
         CASE(bf16);
-        CASE(f32);
         CASE(s32);
         CASE(s8);
         CASE(u8);
-        CASE(s4);
-        CASE(u4);
-        case f64: return nstl::numeric_limits<T>::max();
         case data_type::undef:
         default: assert(!"unknown data_type");
     }
@@ -192,17 +130,12 @@ inline float max_value(data_type_t data_type) {
         return static_cast<float>( \
                 nstl::numeric_limits<prec_traits<x>::type>::max())
     switch (data_type) {
-        CASE(f4_e2m1);
-        CASE(e8m0);
         CASE(f8_e5m2);
         CASE(f8_e4m3);
         CASE(f16);
         CASE(bf16);
-        CASE(f32);
         CASE(s8);
         CASE(u8);
-        CASE(s4);
-        CASE(u4);
         // INT_MAX is not representable in float. The nearest float to it is
         // INT_MAX + 1 = 2^31 (0x4f000000). Regular conversion instructions such
         // as `cvtps2dq` or `cvtss2si` will convert this number to INT_MIN
@@ -214,67 +147,10 @@ inline float max_value(data_type_t data_type) {
         // approach is saturating on some integer values before it should happen
         // in the reality.
         case s32: return 2147483520.f;
-        case f64: return nstl::numeric_limits<float>::max();
         case data_type::undef:
         default: assert(!"unknown data_type");
     }
     return 0.f; /* not supposed to be reachable */
-#undef CASE
-}
-
-template <typename T>
-inline T lowest_value(data_type_t data_type) {
-    using namespace data_type;
-#define CASE(x) \
-    case x: \
-        return static_cast<T>( \
-                nstl::numeric_limits<prec_traits<x>::type>::lowest())
-    switch (data_type) {
-        CASE(f4_e2m1);
-        CASE(e8m0);
-        CASE(f8_e5m2);
-        CASE(f8_e4m3);
-        CASE(f16);
-        CASE(bf16);
-        CASE(f32);
-        CASE(s32);
-        CASE(s8);
-        CASE(u8);
-        CASE(s4);
-        CASE(u4);
-        case f64: return nstl::numeric_limits<T>::lowest();
-        case data_type::undef:
-        default: assert(!"unknown data_type");
-    }
-    return static_cast<T>(0); /* not supposed to be reachable */
-#undef CASE
-}
-
-template <typename T>
-inline T digits(data_type_t data_type) {
-    using namespace data_type;
-#define CASE(x) \
-    case x: \
-        return static_cast<T>( \
-                nstl::numeric_limits<prec_traits<x>::type>::digits)
-    switch (data_type) {
-        CASE(f4_e2m1);
-        CASE(e8m0);
-        CASE(f8_e5m2);
-        CASE(f8_e4m3);
-        CASE(f16);
-        CASE(bf16);
-        CASE(f32);
-        CASE(f64);
-        CASE(s32);
-        CASE(s8);
-        CASE(u8);
-        CASE(s4);
-        CASE(u4);
-        case data_type::undef:
-        default: assert(!"unknown data_type");
-    }
-    return static_cast<T>(0); /* not supposed to be reachable */
 #undef CASE
 }
 
@@ -365,10 +241,6 @@ inline bool wino_desc_is_equal(const wino_desc_t &lhs, const wino_desc_t &rhs) {
             && lhs.ic2_block == rhs.ic2_block && lhs.oc2_block == rhs.oc2_block
             && lhs.r == rhs.r;
 }
-inline bool cublaslt_blocked_desc_is_equal(const cublaslt_blocked_desc_t &lhs,
-        const cublaslt_blocked_desc_t &rhs) {
-    return lhs.cublaslt_format == rhs.cublaslt_format && lhs.size == rhs.size;
-}
 
 inline bool rnn_packed_desc_is_equal(
         const rnn_packed_desc_t &lhs, const rnn_packed_desc_t &rhs) {
@@ -413,9 +285,8 @@ inline data_type_t default_accum_data_type(
     // we allow to use f32 accumulation type only when the
     // accumulation chain is small. Otherwise, strict should be set to
     // true
-    if (one_of(src_dt, s8, u8, u4, s4) && (dst_dt != f32 || strict)) return s32;
+    if (one_of(src_dt, s8, u8) && (dst_dt != f32 || strict)) return s32;
 
-    if (one_of(f4_e2m1, src_dt, dst_dt)) return f32;
     if (one_of(f8_e5m2, src_dt, dst_dt)) return f32;
     if (one_of(f8_e4m3, src_dt, dst_dt)) return f32;
     if (one_of(f16, src_dt, dst_dt)) return f32;
@@ -424,9 +295,7 @@ inline data_type_t default_accum_data_type(
     if (one_of(f64, src_dt, dst_dt)) return f64;
     if (one_of(s32, src_dt, dst_dt)) return s32;
 
-    if (one_of(s8, src_dt, dst_dt) || one_of(u8, src_dt, dst_dt)
-            || one_of(s4, src_dt, dst_dt) || one_of(u4, src_dt, dst_dt))
-        return s32;
+    if (one_of(s8, src_dt, dst_dt) || one_of(u8, src_dt, dst_dt)) return s32;
 
     return data_type::undef;
 }
@@ -442,12 +311,10 @@ inline data_type_t default_accum_data_type(data_type_t src_dt,
     if (everyone_is(f64, src_dt, wei_dt)) return f64;
 
     if (one_of(prop_kind, forward_training, forward_inference)) {
-        if (one_of(src_dt, u8, s8) && one_of(wei_dt, u8, s8, s4, u4))
-            return s32;
+        if ((src_dt == u8 || src_dt == s8) && wei_dt == s8) return s32;
         if (one_of(f16, src_dt, wei_dt)) return f32;
-        // weights decompression
-        if (one_of(src_dt, bf16, f32) && one_of(wei_dt, u8, s8, s4, u4))
-            return f32;
+        // fpmath_mode with weights decompression
+        if (one_of(src_dt, bf16, f32) && one_of(wei_dt, u8, s8)) return f32;
     } else if (prop_kind == backward_data) {
         if (one_of(src_dt, f32, s32, s8, u8) && wei_dt == s8
                 && one_of(dst_dt, s8, u8, s32))
@@ -457,7 +324,6 @@ inline data_type_t default_accum_data_type(data_type_t src_dt,
             return f32;
     }
 
-    if (one_of(f4_e2m1, src_dt, wei_dt, dst_dt)) return f32;
     if (one_of(f8_e5m2, src_dt, wei_dt, dst_dt)) return f32;
     if (one_of(f8_e4m3, src_dt, wei_dt, dst_dt)) return f32;
     if (one_of(bf16, src_dt, wei_dt, dst_dt)) return f32;
@@ -468,7 +334,7 @@ inline data_type_t default_accum_data_type(data_type_t src_dt,
 
 inline bool is_integral_dt(data_type_t dt) {
     using namespace data_type;
-    return utils::one_of(dt, s32, s8, u8, u4, s4);
+    return utils::one_of(dt, s32, s8, u8);
 }
 
 template <typename data_t>
@@ -518,30 +384,6 @@ inline void cvt_to_float<float16_t>(
     cvt_float16_to_float(out, inp, nelems);
 }
 
-template <>
-inline void cvt_to_float<float8_e5m2_t>(
-        float *out, const float8_e5m2_t *inp, size_t nelems) {
-    cvt_f8_e5m2_to_float(out, inp, nelems);
-}
-
-template <>
-inline void cvt_from_float<float8_e5m2_t>(
-        float8_e5m2_t *out, const float *inp, size_t nelems) {
-    cvt_float_to_f8_e5m2(out, inp, nelems);
-}
-
-template <>
-inline void cvt_to_float<float8_e4m3_t>(
-        float *out, const float8_e4m3_t *inp, size_t nelems) {
-    cvt_f8_e4m3_to_float(out, inp, nelems);
-}
-
-template <>
-inline void cvt_from_float<float8_e4m3_t>(
-        float8_e4m3_t *out, const float *inp, size_t nelems) {
-    cvt_float_to_f8_e4m3(out, inp, nelems);
-}
-
 inline void cvt_from_float(
         data_type_t dt, void *out, const float *inp, size_t nelems) {
     switch (dt) {
@@ -550,12 +392,6 @@ inline void cvt_from_float(
             break;
         case data_type::f16:
             cvt_from_float((float16_t *)out, inp, nelems);
-            break;
-        case data_type::f8_e5m2:
-            cvt_from_float((float8_e5m2_t *)out, inp, nelems);
-            break;
-        case data_type::f8_e4m3:
-            cvt_from_float((float8_e4m3_t *)out, inp, nelems);
             break;
         default: assert(!"unimplemented");
     }
@@ -569,12 +405,6 @@ inline void cvt_to_float(
             break;
         case data_type::f16:
             cvt_to_float(out, (const float16_t *)inp, nelems);
-            break;
-        case data_type::f8_e5m2:
-            cvt_to_float(out, (const float8_e5m2_t *)inp, nelems);
-            break;
-        case data_type::f8_e4m3:
-            cvt_to_float(out, (const float8_e4m3_t *)inp, nelems);
             break;
         default: assert(!"unimplemented");
     }
@@ -662,12 +492,11 @@ inline bool operator==(const concat_desc_t &lhs, const concat_desc_t &rhs) {
     return ret;
 }
 
-// This function can only be used to compare the opdescs in the primitive cache.
-// For comparing the opdescs outside the primitive cache please use the regular
-// comparison operator (==).
-inline bool compare_conv_opdesc(const convolution_desc_t &lhs, const convolution_desc_t &rhs) {
+inline bool operator==(
+        const convolution_desc_t &lhs, const convolution_desc_t &rhs) {
     bool ret = COMPARE_DESC_MEMBERS(primitive_kind)
             && COMPARE_DESC_MEMBERS(prop_kind)
+            && COMPARE_DESC_MEMBERS(alg_kind)
             && COMPARE_DESC_MEMBERS(src_desc)
             && COMPARE_DESC_MEMBERS(diff_src_desc)
             && COMPARE_DESC_MEMBERS(weights_desc)
@@ -680,31 +509,8 @@ inline bool compare_conv_opdesc(const convolution_desc_t &lhs, const convolution
             && COMPARE_DESC_ARRAY_MEMBERS(dilates, DNNL_MAX_NDIMS)
             && COMPARE_DESC_ARRAY_MEMBERS(padding[0], DNNL_MAX_NDIMS)
             && COMPARE_DESC_ARRAY_MEMBERS(padding[1], DNNL_MAX_NDIMS)
-            && COMPARE_DESC_MEMBERS(accum_data_type)
-            && COMPARE_DESC_MEMBERS(use_inversion);
-
-      // The `alg_kind` can be `auto` only if this function is called for the
-      // primitive descriptor cache scenario. In this case, we ignore `alg_kind`
-      // and rely on `pd_iterator_offset` to fetch the first suitable
-      // implementation.
-      //
-      // Background: when a convolution primitive descriptor is created for
-      // the algorithm `auto` we overwrite `alg_kind` field in `op_desc` when
-      // store it in the primitive descriptor. Because of that, the `op_desc`
-      // stored in the primitive descriptor is different from the one user
-      // passed to oneDNN API. Because of the difference the requested
-      // primitive descriptor cannot be found in the cache if we compare
-      // `alg_kind`.
-      if (!utils::one_of(alg_kind::convolution_auto, lhs.alg_kind, rhs.alg_kind))
-          ret = ret && COMPARE_DESC_MEMBERS(alg_kind);
-
+            && COMPARE_DESC_MEMBERS(accum_data_type);
     return ret;
-}
-
-inline bool operator==(
-        const convolution_desc_t &lhs, const convolution_desc_t &rhs) {
-        if (!(COMPARE_DESC_MEMBERS(alg_kind))) return false;
-        return compare_conv_opdesc(lhs, rhs);
 }
 
 inline bool operator==(const eltwise_desc_t &lhs, const eltwise_desc_t &rhs) {
@@ -950,19 +756,6 @@ inline bool operator==(const zero_pad_desc_t &lhs, const zero_pad_desc_t &rhs) {
     bool ret = COMPARE_DESC_MEMBERS(primitive_kind);
     return ret;
 }
-
-inline bool operator==(const sdpa_desc_t &lhs, const sdpa_desc_t &rhs) {
-    bool ret = COMPARE_DESC_MEMBERS(primitive_kind)
-            && COMPARE_DESC_MEMBERS(q_desc)
-            && COMPARE_DESC_MEMBERS(k_desc)
-            && COMPARE_DESC_MEMBERS(v_desc)
-            && COMPARE_DESC_MEMBERS(dst_desc)
-            && COMPARE_DESC_MEMBERS(attn_mask_desc)
-            && COMPARE_DESC_MEMBERS(scale_dt)
-            && COMPARE_DESC_MEMBERS(invert_scale);
-    return ret;
-}
-
 // clang-format on
 
 #undef COMPARE_DESC_MEMBERS
@@ -1231,8 +1024,8 @@ inline bool memory_desc_sanity_check(int ndims, const dims_t dims,
     if (ndims == 0) return true;
 
     bool ok = dims != nullptr && 0 < ndims && ndims <= DNNL_MAX_NDIMS
-            && utils::one_of(data_type, f4_e2m1, e8m0, f8_e5m2, f8_e4m3, f16,
-                    bf16, f32, f64, s32, s8, u8, s4, u4);
+            && utils::one_of(data_type, f8_e5m2, f8_e4m3, f16, bf16, f32, f64,
+                    s32, s8, u8);
     if (!ok) return false;
 
     bool has_runtime_dims = false;
@@ -1275,7 +1068,6 @@ inline void copy_c_op_desc(op_desc_t *dst, const op_desc_t *src) {
         CASE_OP_DESC(reduction);
         CASE_OP_DESC(resampling);
         CASE_OP_DESC(rnn);
-        CASE_OP_DESC(sdpa);
         CASE_OP_DESC(shuffle);
         CASE_OP_DESC(softmax);
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2024 Intel Corporation
+* Copyright 2019-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -264,8 +264,7 @@ protected:
         aa.po_eltwise = true;
         aa.po_prelu = !is_nvidia_gpu(eng) && !is_amd_gpu(eng);
         aa.po_sum = true;
-        // scales are not supported by HIP
-        aa.scales = !is_amd_gpu(eng);
+        aa.scales = true;
         bool is_int8 = impl::utils::one_of(src_md.get_data_type(),
                 memory::data_type::s8, memory::data_type::u8);
         if (is_int8) aa.zp = true;

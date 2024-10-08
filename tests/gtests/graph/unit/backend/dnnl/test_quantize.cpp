@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -275,7 +275,7 @@ TEST(test_quantize_execute, TypecastQuantize) {
     strm->wait();
 }
 
-TEST(test_quantize_execute, DynamicQuantizeS32ZpsPerTensor_CPU) {
+TEST(test_quantize_execute, DynamicQuantizeS32ZpsPerTensor) {
     // default engine kind is cpu.
     graph::engine_t *eng = get_engine();
 
@@ -348,7 +348,7 @@ TEST(test_quantize_execute, DynamicQuantizeS32ZpsPerTensor_CPU) {
     }
 }
 
-TEST(test_quantize_execute, DynamicQuantizeS32ZpsPerChannel_CPU) {
+TEST(test_quantize_execute, DynamicQuantizeS32ZpsPerChannel) {
     // oneDNN reorder primitive didn't support per channel asymmetric quantize
     // regression?
     SKIP_IF(true,
@@ -427,7 +427,7 @@ TEST(test_quantize_execute, DynamicQuantizeS32ZpsPerChannel_CPU) {
     }
 }
 
-TEST(test_quantize_execute, DynamicQuantizeS8ZpsPerTensor_CPU) {
+TEST(test_quantize_execute, DynamicQuantizeS8ZpsPerTensor) {
     // default engine kind is cpu.
     graph::engine_t *eng = get_engine();
 
@@ -500,7 +500,7 @@ TEST(test_quantize_execute, DynamicQuantizeS8ZpsPerTensor_CPU) {
     }
 }
 
-TEST(test_quantize_execute, DynamicQuantizeNoZpsPerTensor_CPU) {
+TEST(test_quantize_execute, DynamicQuantizeNoZpsPerTensor) {
     // default engine kind is cpu.
     graph::engine_t *eng = get_engine();
 

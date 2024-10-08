@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2024 Intel Corporation
+* Copyright 2017-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -34,7 +34,6 @@
 #include "src/common/z_magic.hpp"
 
 #include "utils/bench_mode.hpp"
-#include "utils/res.hpp"
 #include "utils/timer.hpp"
 
 #define ABS(a) ((a) > 0 ? (a) : (-(a)))
@@ -94,7 +93,6 @@ extern int verbose;
 extern bool canonical;
 extern bool mem_check;
 extern bool attr_same_pd_check;
-extern bool check_ref_impl;
 extern std::string skip_impl; /* empty or "" means skip nothing */
 extern std::string driver_name;
 
@@ -139,18 +137,43 @@ struct stat_t {
 };
 extern stat_t benchdnn_stat;
 
+/* result structure */
+enum res_state_t {
+    UNTESTED = 0,
+    PASSED,
+    SKIPPED,
+    MISTRUSTED,
+    UNIMPLEMENTED,
+    INVALID_ARGUMENTS,
+    FAILED,
+    LISTED,
+    INITIALIZED,
+    EXECUTED,
+};
 const char *state2str(res_state_t state);
 
-namespace skip_reason {
-extern std::string case_not_supported;
-extern std::string data_type_not_supported;
-extern std::string invalid_case;
-extern std::string not_enough_ram;
-extern std::string skip_impl_hit;
-extern std::string skip_start;
-} // namespace skip_reason
+enum skip_reason_t {
+    SKIP_UNKNOWN = 0,
+    CASE_NOT_SUPPORTED,
+    DATA_TYPE_NOT_SUPPORTED,
+    INVALID_CASE,
+    NOT_ENOUGH_RAM,
+    SKIP_IMPL_HIT,
+    SKIP_START,
+};
+const char *skip_reason2str(skip_reason_t skip_reason);
 
-dir_t str2dir(const char *str);
+struct res_t {
+    res_state_t state;
+    size_t errors, total;
+    timer::timer_map_t timer_map;
+    std::string impl_name;
+    std::string prim_ref_repro;
+    skip_reason_t reason;
+    size_t ibytes, obytes;
+    bool mem_check_done;
+};
+
 void parse_result(res_t &res, const char *pstr);
 
 /* misc */
@@ -199,8 +222,5 @@ int sanitize_desc(int &ndims, std::vector<std::reference_wrapper<int64_t>> d,
 void print_dhw(bool &print_d, bool &print_h, bool &print_w, int ndims,
         const std::vector<int64_t> &d, const std::vector<int64_t> &h,
         const std::vector<int64_t> &w);
-
-int benchdnn_getenv_int(const char *name, int default_value);
-std::string benchdnn_getenv_string(const char *name);
 
 #endif

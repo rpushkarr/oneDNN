@@ -16,13 +16,10 @@ operations which take bool as inputs and/or outputs data type.
 | bf16      | [non-IEEE 16-bit floating-point](https://www.intel.com/content/dam/develop/external/us/en/documents/bf16-hardware-numerics-definition-white-paper.pdf)                                  |
 | f16       | [IEEE half precision floating-point](https://en.wikipedia.org/wiki/Half-precision_floating-point_format#IEEE_754_half-precision_binary_floating-point_format:_binary16)                 |
 | s8/u8     | signed/unsigned 8-bit integer                                                                                                                                                           |
-| s4/u4     | signed/unsigned 4-bit integer                                                                                                                                                           |
 | f64       | [IEEE double precision floating-point](https://en.wikipedia.org/wiki/Double-precision_floating-point_format#IEEE_754_double-precision_binary_floating-point_format:_binary64)           |
 | boolean   | bool (size is C++ implementation defined)                                                                                                                                               |
 | f8\_e5m2  | [OFP8 standard 8-bit floating-point](https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-0-2023-06-20-pdf) with 5 exponent and 2 mantissa bits |
 | f8\_e4m3  | [OFP8 standard 8-bit floating-point](https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-0-2023-06-20-pdf) with 4 exponent and 3 mantissa bits |
-| e8m0      | [MX standard 8-bit scaling type](https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf)                                                                 |
-| f4\_e2m1  | [MX standard 4-bit floating-point](https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf) with 2 exponent and 1 mantissa bits                           |
 
 
 @note
@@ -33,10 +30,10 @@ operations which take bool as inputs and/or outputs data type.
 
 oneDNN supports training and inference with the following data types:
 
-| Usage mode | CPU                                                                | GPU                                           |
-|:-----------|:-------------------------------------------------------------------|:----------------------------------------------|
-| Inference  | f32, bf16, f16, f8\_e5m2/f8\_e4m3, f4\_e2m1, s8/u8, s4/u4, boolean | f32, bf16, f16, f8\_e5m2/f8\_e4m3, s8/u8, f64 |
-| Training   | f32, bf16, f16                                                     | f32, bf16, f16, f64                           |
+| Usage mode | CPU                                               | GPU                                           |
+|:-----------|:--------------------------------------------------|:----------------------------------------------|
+| Inference  | f32, bf16, f16, f8\_e5m2/f8\_e4m3, s8/u8, boolean | f32, bf16, f16, f8\_e5m2/f8\_e4m3, s8/u8, f64 |
+| Training   | f32, bf16, f16                                    | f32, bf16, f64                                |
 
 @note
     Using lower precision arithmetic may require changes in the deep learning
@@ -50,17 +47,10 @@ oneDNN supports training and inference with the following data types:
     Boolean is only supported by the oneDNN graph API when the graph compiler
     backend is enabled.
 
-@note
-    s4/u4 data types are only supported as a storage data type for weights argument
-    in case of weights decompression. For more details, refer to
-    [Matmul Tutorial: weights decompression](@ref weights_decompression_matmul_cpp).
-
 See topics for the corresponding data types details:
  * @ref dev_guide_inference_int8
  * @ref dev_guide_attributes_quantization
  * @ref dev_guide_training_bf16
- * @ref dev_guide_attributes_fpmath_mode
- * @ref weights_decompression_matmul_cpp
 
 Individual primitives may have additional limitations with respect to data type
 by each primitive is included in the corresponding sections of the developer
@@ -82,7 +72,7 @@ a primitive computation:
 
 The `Op` output datatype depends on the datatype of its inputs:
 - if `src`, `weights`, ... are floating-point datatype (f32, f16,
-  bf16, f8\_e5m2, f8\_e4m3, f4\_e2m1), then the `Op` outputs f32 elements.
+  bf16, f8\_e5m2, f8\_e4m3), then the `Op` outputs f32 elements.
 - if `src`, `weights`, ... are integral datatypes (s8, u8, s32), then
   the `Op` outputs s32 elements.
 - if the primitive allows to mix input datatypes, the `Op` outputs
@@ -100,21 +90,15 @@ dev_guide_attributes_fpmath_mode.
 
 
 
-### Rounding mode and denormal handling
-
-oneDNN floating-point computation behavior follows the floating-point
-environment for the given device runtime by default. In particular,
-the floating-point environment can control:
+### Floating-point environment
+oneDNN floating-point computation behavior is controlled by the
+floating-point environment as defined by the C and C++ standards, in
+the fenv.h header. In particular, the floating-point environment can control:
 - the rounding mode. It is set to round-to-nearest tie-even by default
-  on x64 systems as well as devices running on SYCL and openCL runtime.
-- the handling of denormal values. Computation on denormals are not
-  flushed to zero by default. Note denormal handling can negatively
-  impact performance on x64 systems.
-
-@note
-  For CPU devices, the default floating-point environment is defined by
-  the C and C++ standards in the fenv.h header. Rounding mode can be
-  changed globally using the fesetround() C function.
+  on x64 systems and can be changed using the fesetround() C function.
+- the handling of denormal values. Computation on denormals can
+  negatively impact performance on x64 systems and are not flushed to
+  zero by default.
 
 @note
   Most DNN applications do not require precise computations with denormal
@@ -125,16 +109,6 @@ the floating-point environment can control:
 #include <xmmintrin.h>
 _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
 ~~~
-
-@note
-  On some hardware architectures, low-precision datatype acceleration
-  ignores floating-point environment and will flush denormal outputs
-  to zero (FTZ). In particular this is the case for Intel AMX
-  instruction set.
-
-oneDNN also exposes non-standard stochastic rounding through the
-`rounding_mode` primitive attribute. More details on this attribute
-can be found in @ref dev_guide_attributes_rounding_mode.
 
 ## Hardware Limitations
 
@@ -166,8 +140,7 @@ types that oneDNN recognizes.
 | bf16               | Intel DL Boost with bfloat16 support |
 | f16                | Intel AVX512-FP16                    |
 | boolean            | Intel AVX2                           |
-| f8\_e5m2, f8\_e4m3 | Intel AVX512-FP16                    |
-| f4\_e2m1           | TBA                                  |
+| f8\_e5m2, f8\_e4m3 | TBA.                                 |
 
 @note
   See @ref dev_guide_int8_computations in the Developer Guide for additional
@@ -213,13 +186,12 @@ The following table indicates the data types with performant compute primitives
 for each uArch supported by oneDNN. Unless otherwise noted, all data types have 
 reference support on all architectures.
 
-| uArch  | Supported Data types                                      |
-|:-------|:----------------------------------------------------------|
-| Xe-LP  | f32, f16, s8, u8                                          |
-| Xe-HPG | f32, f16, bf16, s8, u8                                    |
-| Xe-HPC | f64, f32, bf16, f16, s8, u8                               |
-| TBA    | f64, f32, bf16, f16, s8, u8, f8\_e5m2, f8\_e4m3, f4\_e2m1 |
-
+| uArch  | Supported Data types                             |
+|:-------|:-------------------------------------------------|
+| Xe-LP  | f32, f16, s8, u8                                 |
+| Xe-HPG | f32, f16, bf16, s8, u8                           |
+| Xe-HPC | f64, f32, bf16, f16, s8, u8                      |
+| TBA    | f64, f32, bf16, f16, s8, u8, f8\_e5m2, f8\_e4m3  |
 
 @note
   f64 configurations are only supported on GPU engines with HW capability for

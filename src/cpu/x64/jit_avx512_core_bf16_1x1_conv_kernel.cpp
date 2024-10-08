@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2024 Intel Corporation
+* Copyright 2019-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -45,7 +45,9 @@ using namespace Xbyak;
 jit_avx512_core_bf16_1x1_conv_kernel::jit_avx512_core_bf16_1x1_conv_kernel(
         const jit_1x1_conv_conf_t &ajcp, const primitive_attr_t &attr,
         const memory_desc_t &dst_md)
-    : jit_generator(jit_name(), avx512_core_bf16), jcp(ajcp), attr_(attr) {
+    : jit_generator(jit_name(), nullptr, ker_code_size, true, avx512_core_bf16)
+    , jcp(ajcp)
+    , attr_(attr) {
     if (jcp.with_eltwise || jcp.with_binary) {
         using namespace binary_injector;
         static constexpr bool preserve_gpr = true;
@@ -1172,8 +1174,7 @@ void jit_avx512_core_bf16_1x1_conv_kernel::generate() {
 
     postamble();
 
-    if (jcp.with_eltwise)
-        postops_injector_->prepare_table(/* generate = */ true);
+    if (jcp.with_eltwise) postops_injector_->prepare_table();
 
     if (jcp.prop_kind == backward_weights) {
         const uint16_t dst_prm_array[32] = {0, 16, 1, 17, 2, 18, 3, 19, 4, 20,

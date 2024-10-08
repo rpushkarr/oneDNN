@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -38,9 +38,8 @@ struct jit_args_int8_t {
 };
 
 struct jit_uni_eltwise_int_kernel : public jit_generator {
-    jit_uni_eltwise_int_kernel(
-            const eltwise_pd_t *pd, const cpu_isa_t isa, const char *name)
-        : jit_generator(name, isa), pd_(pd) {}
+    jit_uni_eltwise_int_kernel(const eltwise_pd_t *pd, const char *name)
+        : jit_generator(name), pd_(pd) {}
 
     void operator()(jit_args_int8_t *p) { jit_generator::operator()(p); }
 
@@ -63,12 +62,12 @@ struct jit_uni_subkernel_int_t : public jit_uni_eltwise_int_kernel {
     DECLARE_CPU_JIT_AUX_FUNCTIONS(jit_uni_subkernel_int)
 
     jit_uni_subkernel_int_t(const eltwise_pd_t *pd)
-        : jit_uni_eltwise_int_kernel(pd, isa, jit_name()) {
+        : jit_uni_eltwise_int_kernel(pd, jit_name()) {
         using namespace data_type;
 
         // Relu and linear for int types: s32, s8, u8; Only forward direction
         assert(utils::one_of(desc().alg_kind, alg_kind::eltwise_relu,
-                alg_kind::eltwise_linear, alg_kind::eltwise_clip));
+                alg_kind::eltwise_linear));
         assert(utils::one_of(data_type(), s32, s8, u8));
         assert(utils::one_of(isa, sse41, avx2, avx512_core));
     }
@@ -201,7 +200,6 @@ private:
     // Processing
     void process_linear(const Vmm &vr_to, const Vmm &vr_from);
     void process_relu(const Vmm &vr_to, const Vmm &vr_from);
-    void process_clip(const Vmm &vr_to, const Vmm &vr_from);
 
     // Store s32 for any isa
     void store_32bit(
@@ -248,10 +246,6 @@ private:
                 for (size_t i = 0; i < uf; i++)
                     process_relu(vreg_to(i), vreg_from(i));
                 break;
-            case alg_kind::eltwise_clip:
-                for (size_t i = 0; i < uf; i++)
-                    process_clip(vreg_to(i), vreg_from(i));
-                break;
             default: assert(!"unsupported alg");
         }
 
@@ -273,7 +267,9 @@ void jit_uni_subkernel_int_t<isa>::process_linear(
     uni_vpxor(vmm_zero, vmm_zero, vmm_zero);
     init_saturate_f32(vmm_zero, vmm_saturation_ubound, reg_tmp, data_type::f32,
             data_type());
-    saturate_cvt_f32(vr_to, vmm_zero, vmm_saturation_ubound, data_type());
+    saturate_f32(vr_to, vmm_zero, vmm_saturation_ubound, data_type());
+
+    uni_vcvtps2dq(vr_to, vr_to);
 }
 
 template <cpu_isa_t isa>
@@ -316,43 +312,6 @@ void jit_uni_subkernel_int_t<avx512_core>::process_relu(
     vmulps(vr_to, vr_from, vmm_alpha);
     vcmpps(k_mask, vr_from, vmm_zero, _cmp_nle_us);
     vblendmps(vr_to | k_mask, vr_to, vr_from);
-    vcvtps2dq(vr_to, vr_to);
-}
-
-template <cpu_isa_t isa>
-void jit_uni_subkernel_int_t<isa>::process_clip(
-        const Vmm &vr_to, const Vmm &vr_from) {
-    assert(!"unsupported isa");
-}
-
-template <>
-void jit_uni_subkernel_int_t<sse41>::process_clip(
-        const Vmm &vr_to, const Vmm &vr_from) {
-
-    cvtdq2ps(vr_from, vr_from);
-    movups(vr_to, vr_from);
-    maxps(vr_to, vmm_alpha);
-    minps(vr_to, vmm_beta);
-    cvtps2dq(vr_to, vr_to);
-}
-
-template <>
-void jit_uni_subkernel_int_t<avx2>::process_clip(
-        const Vmm &vr_to, const Vmm &vr_from) {
-
-    vcvtdq2ps(vr_from, vr_from);
-    vmaxps(vr_to, vr_from, vmm_alpha);
-    vminps(vr_to, vr_to, vmm_beta);
-    vcvtps2dq(vr_to, vr_to);
-}
-
-template <>
-void jit_uni_subkernel_int_t<avx512_core>::process_clip(
-        const Vmm &vr_to, const Vmm &vr_from) {
-
-    vcvtdq2ps(vr_from, vr_from);
-    vmaxps(vr_to, vr_from, vmm_alpha);
-    vminps(vr_to, vr_to, vmm_beta);
     vcvtps2dq(vr_to, vr_to);
 }
 
@@ -441,27 +400,18 @@ void jit_uni_subkernel_int_t<avx512_core>::store_8bit(const bool vectorize,
 
 template <cpu_isa_t isa, data_type_t d_type>
 status_t jit_uni_eltwise_int_fwd_t<isa, d_type>::pd_t::init(engine_t *engine) {
-    // disabling verbose dispatch messages for unsupported isa for better readability
-    if (!mayiuse(isa)) return status::unimplemented;
+    bool ok = is_fwd() && mayiuse(isa)
+            && utils::everyone_is(
+                    d_type, src_md()->data_type, dst_md()->data_type)
+            // only relu and linear so far
+            && utils::one_of(desc()->alg_kind, alg_kind::eltwise_relu,
+                    alg_kind::eltwise_linear)
+            && !has_zero_dim_memory()
+            && memory_desc_wrapper(src_md()).is_dense(true)
+            && attr()->has_default_values() && set_default_formats_common()
+            && memory_desc_wrapper(src_md()) == memory_desc_wrapper(dst_md());
 
-    VDISPATCH_ELTWISE(is_fwd(), VERBOSE_BAD_PROPKIND);
-    VDISPATCH_ELTWISE(utils::everyone_is(
-                              d_type, src_md()->data_type, dst_md()->data_type),
-            VERBOSE_UNSUPPORTED_DT);
-    // only relu and linear so far
-    VDISPATCH_ELTWISE(utils::one_of(desc()->alg_kind, alg_kind::eltwise_relu,
-                              alg_kind::eltwise_linear, alg_kind::eltwise_clip),
-            VERBOSE_BAD_ALGORITHM);
-    VDISPATCH_ELTWISE(!has_zero_dim_memory(), VERBOSE_EMPTY_TENSOR, "");
-    VDISPATCH_ELTWISE(memory_desc_wrapper(src_md()).is_dense(true),
-            VERBOSE_UNSUPPORTED_SPARSE_CFG);
-    VDISPATCH_ELTWISE(attr()->has_default_values(), VERBOSE_UNSUPPORTED_ATTR);
-    VDISPATCH_ELTWISE(set_default_formats_common(), VERBOSE_UNSUPPORTED_TAG);
-    VDISPATCH_ELTWISE(
-            memory_desc_wrapper(src_md()) == memory_desc_wrapper(dst_md()),
-            VERBOSE_INCONSISTENT_MDS, "src", "dst");
-
-    return status::success;
+    return ok ? status::success : status::unimplemented;
 }
 
 template <cpu_isa_t isa, data_type_t d_type>

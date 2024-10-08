@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 * Copyright 2020-2022 Codeplay Software Limited
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,13 +22,13 @@
 #include "common/c_types_map.hpp"
 #include "common/primitive.hpp"
 #include "common/type_helpers.hpp"
-#include "gpu/amd/engine.hpp"
 #include "gpu/amd/miopen_batch_normalization_impl.hpp"
-#include "gpu/amd/stream.hpp"
+#include "gpu/amd/sycl_hip_engine.hpp"
 #include "gpu/amd/sycl_hip_scoped_context.hpp"
+#include "gpu/amd/sycl_hip_stream.hpp"
 #include "gpu/amd/sycl_hip_utils.hpp"
+#include "sycl/sycl_memory_storage_helper.hpp"
 #include "sycl_hip_utils.hpp"
-#include "xpu/sycl/memory_storage_helper.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -36,7 +36,7 @@ namespace gpu {
 namespace amd {
 
 struct bnorm_exec_base_t {
-    virtual status_t execute(const exec_ctx_t &ctx, impl::engine_t *engine,
+    virtual status_t execute(const exec_ctx_t &ctx, engine_t *engine,
             const std::shared_ptr<miopen_batch_normalization_impl_base_t>
                     bnorm_impl) const = 0;
     virtual ~bnorm_exec_base_t() = default;
@@ -45,27 +45,24 @@ protected:
     template <::sycl::access::mode mean_var_m = ::sycl::access::mode::write>
     void interop_task_fwd(
             std::shared_ptr<miopen_batch_normalization_impl_base_t> bnorm_impl,
-            impl::engine_t *engine, ::sycl::handler &cgh,
-            amd::stream_t *hip_stream,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::read> arg_src,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::write>
-                    arg_dst,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::read>
-                    arg_scale,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::write>
+            engine_t *engine, ::sycl::handler &cgh,
+            amd::sycl_hip_stream_t *hip_stream,
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::read> arg_src,
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::write> arg_dst,
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::read> arg_scale,
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::write>
                     arg_scale_buf,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::read>
-                    arg_shift,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::write>
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::read> arg_shift,
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::write>
                     arg_shift_buf,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::write>
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::write>
                     arg_wkspace,
             bool use_scale, bool use_shift, bool init_global_stats,
-            xpu::sycl::interop_memory_arg_t<mean_var_m> arg_mean = {},
-            xpu::sycl::interop_memory_arg_t<mean_var_m> arg_var = {}) const {
+            impl::sycl::sycl_memory_arg_t<mean_var_m> arg_mean = {},
+            impl::sycl::sycl_memory_arg_t<mean_var_m> arg_var = {}) const {
 
         compat::host_task(cgh, [=](const compat::interop_handle &ih) {
-            auto &sycl_engine = *utils::downcast<amd::engine_t *>(engine);
+            auto &sycl_engine = *utils::downcast<sycl_hip_engine_t *>(engine);
             auto sc = hip_sycl_scoped_context_handler_t(sycl_engine);
             auto handle = hip_stream->get_miopen_handle();
 
@@ -111,32 +108,31 @@ protected:
 
     void interop_task_bwd(
             std::shared_ptr<miopen_batch_normalization_impl_base_t> bnorm_impl,
-            impl::engine_t *engine, ::sycl::handler &cgh,
-            amd::stream_t *hip_stream,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::read> arg_src,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::read>
+            engine_t *engine, ::sycl::handler &cgh,
+            amd::sycl_hip_stream_t *hip_stream,
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::read> arg_src,
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::read>
                     arg_diff_dst,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::write>
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::write>
                     arg_diff_src,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::read>
-                    arg_scale,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::write>
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::read> arg_scale,
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::write>
                     arg_scale_buf,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::write>
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::write>
                     arg_diff_scale,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::write>
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::write>
                     arg_diff_scale_buf,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::write>
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::write>
                     arg_diff_shift,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::write>
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::write>
                     arg_diff_shift_buf,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::read>
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::read>
                     arg_wkspace,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::read_write>
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::read_write>
                     arg_temp_relu,
             bool use_scale, bool use_shift) const {
         compat::host_task(cgh, [=](const compat::interop_handle &ih) {
-            auto &sycl_engine = *utils::downcast<amd::engine_t *>(engine);
+            auto &sycl_engine = *utils::downcast<sycl_hip_engine_t *>(engine);
             auto sc = hip_sycl_scoped_context_handler_t(sycl_engine);
             auto handle = hip_stream->get_miopen_handle();
 
@@ -184,13 +180,14 @@ protected:
 
     template <typename T = float>
     void init_scaleshift(hip_sycl_scoped_context_handler_t &sc,
-            const compat::interop_handle &ih, amd::stream_t *hip_stream, T,
-            float, size_t) const {}
+            const compat::interop_handle &ih,
+            amd::sycl_hip_stream_t *hip_stream, T, float, size_t) const {}
 
     template <typename T = float>
     void init_scaleshift(hip_sycl_scoped_context_handler_t &sc,
-            const compat::interop_handle &ih, amd::stream_t *hip_stream,
-            xpu::sycl::interop_memory_arg_t<::sycl::access::mode::write>
+            const compat::interop_handle &ih,
+            amd::sycl_hip_stream_t *hip_stream,
+            impl::sycl::sycl_memory_arg_t<::sycl::access::mode::write>
                     arg_scale,
             float val, const size_t n) const {
 
@@ -207,15 +204,15 @@ protected:
     // Handle the cases when mean and var are read-only accessors or nullptr
     template <typename T, typename U>
     void init_mean_var(hip_sycl_scoped_context_handler_t &sc,
-            const compat::interop_handle &ih, amd::stream_t *hip_stream, T, U,
-            const size_t) const {}
+            const compat::interop_handle &ih,
+            amd::sycl_hip_stream_t *hip_stream, T, U, const size_t) const {}
 
     template <typename T = float>
     void init_mean_var(hip_sycl_scoped_context_handler_t &sc,
-            const compat::interop_handle &ih, amd::stream_t *hip_stream,
-            xpu::sycl::interop_memory_arg_t<::sycl::access_mode::write>
-                    arg_mean,
-            xpu::sycl::interop_memory_arg_t<::sycl::access_mode::write> arg_var,
+            const compat::interop_handle &ih,
+            amd::sycl_hip_stream_t *hip_stream,
+            impl::sycl::sycl_memory_arg_t<::sycl::access_mode::write> arg_mean,
+            impl::sycl::sycl_memory_arg_t<::sycl::access_mode::write> arg_var,
             const size_t n) const {
         constexpr T mean_var_val = 0;
         hip_stream->interop_task([&](::sycl::handler &cgh) {
@@ -233,11 +230,11 @@ protected:
 };
 
 struct bnorm_exec_fwd_t : public bnorm_exec_base_t {
-    status_t execute(const exec_ctx_t &ctx, impl::engine_t *engine,
+    status_t execute(const exec_ctx_t &ctx, engine_t *engine,
             std::shared_ptr<miopen_batch_normalization_impl_base_t> bnorm_impl)
             const override {
-        amd::stream_t *hip_stream
-                = utils::downcast<amd::stream_t *>(ctx.stream());
+        amd::sycl_hip_stream_t *hip_stream
+                = utils::downcast<amd::sycl_hip_stream_t *>(ctx.stream());
         const bool use_global_stats = bnorm_impl->use_global_stats();
         const bool use_scale = bnorm_impl->use_scale();
         const bool use_shift = bnorm_impl->use_shift();
@@ -249,14 +246,14 @@ struct bnorm_exec_fwd_t : public bnorm_exec_base_t {
             auto arg_src = CTX_IN_SYCL_MEMORY(DNNL_ARG_SRC);
             auto arg_dst = CTX_OUT_SYCL_MEMORY(DNNL_ARG_DST);
             auto arg_scale = CTX_IN_SYCL_MEMORY(DNNL_ARG_SCALE);
-            auto arg_scale_buf = xpu::sycl::interop_memory_arg_t<
+            auto arg_scale_buf = impl::sycl::sycl_memory_arg_t<
                     ::sycl::access::mode::write>(scale_buf, cgh);
             auto arg_shift = CTX_IN_SYCL_MEMORY(DNNL_ARG_SHIFT);
-            auto arg_shift_buf = xpu::sycl::interop_memory_arg_t<
+            auto arg_shift_buf = impl::sycl::sycl_memory_arg_t<
                     ::sycl::access::mode::write>(shift_buf, cgh);
             auto arg_wkspace = bnorm_impl->is_training()
                     ? CTX_OUT_SYCL_MEMORY(DNNL_ARG_WORKSPACE)
-                    : xpu::sycl::interop_memory_arg_t<
+                    : impl::sycl::sycl_memory_arg_t<
                             ::sycl::access::mode::write>();
 
             if (!use_global_stats) {
@@ -281,11 +278,11 @@ struct bnorm_exec_fwd_t : public bnorm_exec_base_t {
 };
 
 struct bnorm_exec_bwd_t : public bnorm_exec_base_t {
-    status_t execute(const exec_ctx_t &ctx, impl::engine_t *engine,
+    status_t execute(const exec_ctx_t &ctx, engine_t *engine,
             std::shared_ptr<miopen_batch_normalization_impl_base_t> bnorm_impl)
             const override {
-        amd::stream_t *hip_stream
-                = utils::downcast<amd::stream_t *>(ctx.stream());
+        amd::sycl_hip_stream_t *hip_stream
+                = utils::downcast<amd::sycl_hip_stream_t *>(ctx.stream());
         const bool use_scale = bnorm_impl->use_scale();
         const bool use_shift = bnorm_impl->use_shift();
         auto n_channels = bnorm_impl->C();
@@ -298,13 +295,13 @@ struct bnorm_exec_bwd_t : public bnorm_exec_base_t {
             auto arg_diff_dst = CTX_IN_SYCL_MEMORY(DNNL_ARG_DIFF_DST);
             auto arg_diff_src = CTX_OUT_SYCL_MEMORY(DNNL_ARG_DIFF_SRC);
             auto arg_scale = CTX_IN_SYCL_MEMORY(DNNL_ARG_SCALE);
-            auto arg_scale_buf = xpu::sycl::interop_memory_arg_t<
+            auto arg_scale_buf = impl::sycl::sycl_memory_arg_t<
                     ::sycl::access::mode::write>(scale_buf, cgh);
             auto arg_diff_scale = CTX_OUT_SYCL_MEMORY(DNNL_ARG_DIFF_SCALE);
-            auto arg_diff_scale_buf = xpu::sycl::interop_memory_arg_t<
+            auto arg_diff_scale_buf = impl::sycl::sycl_memory_arg_t<
                     ::sycl::access::mode::write>(diff_scale_buf, cgh);
             auto arg_diff_shift = CTX_OUT_SYCL_MEMORY(DNNL_ARG_DIFF_SHIFT);
-            auto arg_diff_shift_buf = xpu::sycl::interop_memory_arg_t<
+            auto arg_diff_shift_buf = impl::sycl::sycl_memory_arg_t<
                     ::sycl::access::mode::write>(diff_shift_buf, cgh);
             auto arg_wkspace = CTX_IN_SYCL_MEMORY(DNNL_ARG_WORKSPACE);
             auto arg_temp_relu

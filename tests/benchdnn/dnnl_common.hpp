@@ -185,7 +185,7 @@ template <typename prb_t>
 struct init_pd_args_t {
     init_pd_args_t(res_t *res, dnnl_engine_t engine, const prb_t *prb,
             dir_t dir, const_dnnl_primitive_desc_t hint,
-            const_dnnl_memory_desc_t src_md, bool force_f32_dt)
+            const_dnnl_memory_desc_t src_md)
         : pd(nullptr)
         , is_iterator_supported(true)
         , res(res)
@@ -193,13 +193,7 @@ struct init_pd_args_t {
         , prb(prb)
         , dir(dir)
         , hint(hint)
-        , src_md(src_md)
-        , force_f32_dt(force_f32_dt) {}
-
-    init_pd_args_t(res_t *res, dnnl_engine_t engine, const prb_t *prb,
-            dir_t dir, const_dnnl_primitive_desc_t hint,
-            const_dnnl_memory_desc_t src_md)
-        : init_pd_args_t(res, engine, prb, dir, hint, src_md, false) {}
+        , src_md(src_md) {}
 
     // Output members
     dnnl_primitive_desc_t pd;
@@ -210,15 +204,10 @@ struct init_pd_args_t {
     res_t *res;
     dnnl_engine_t engine;
     const prb_t *prb;
-    // Used to specify the prop_kind of the pd. Required for double-run drivers
-    // to differentiate between fwd-for-bwd pd and actual bwd pd.
     dir_t dir;
     const_dnnl_primitive_desc_t hint;
     // Use for memory propagation between pd. Nullptr will ignore the setting.
     const_dnnl_memory_desc_t src_md;
-    // When `true`, overrides prb data type with f32 for ALL memory descriptors
-    // when creating pd objects.
-    bool force_f32_dt;
 };
 
 struct cpu_cache_args_t {
@@ -228,20 +217,16 @@ struct cpu_cache_args_t {
     size_t total_socket_size = 0; // (L2 + L3_per_core) * num_cores
 };
 
-size_t get_cpu_ram_size();
-int get_gpu_ram_sizes(size_t &ram_size, size_t &max_alloc_size);
 int get_cpu_cache_size(cpu_cache_args_t &cache_args);
 int get_gpu_cache_size(size_t &cache_size);
 
-bool is_fwd_training(dnnl_prop_kind_t prop_kind);
 bool is_fwd_prop_kind(dnnl_prop_kind_t prop_kind);
 int get_memory_footprint(const_dnnl_primitive_desc_t pd, res_t *res);
 int check_same_pd(const dnnl_primitive_desc_t &pd_no_attr, res_t *res);
 int test_persistent_cache_api(
         benchdnn_dnnl_wrapper_t<dnnl_primitive_t> &prim, res_t *res);
 int check_mem_size(const_dnnl_memory_desc_t md, res_t *res);
-int check_mem_size(const_dnnl_primitive_desc_t const_pd, res_t *res, dir_t dir,
-        bool need_skip = true);
+int check_mem_size(const_dnnl_primitive_desc_t const_pd, res_t *res);
 
 inline bool should_stop(const timer::timer_t &t) {
     const bool stop = false
@@ -311,7 +296,7 @@ int check_dnnl_status(dnnl_status_t status, const prb_t *prb, res_t *res) {
             // not supported.
             if (is_nvidia_gpu() || is_amd_gpu()) {
                 res->state = SKIPPED;
-                res->reason = skip_reason::case_not_supported;
+                res->reason = CASE_NOT_SUPPORTED;
                 return OK;
             }
 
@@ -357,7 +342,7 @@ int fetch_impl(benchdnn_dnnl_wrapper_t<dnnl_primitive_desc_t> &pdw,
         // Iterator is not supported, further logic is not applicable.
         if (!init_pd_args.is_iterator_supported) {
             res->state = SKIPPED;
-            res->reason = skip_reason::skip_impl_hit;
+            res->reason = SKIP_IMPL_HIT;
             return OK;
         }
 
@@ -365,7 +350,7 @@ int fetch_impl(benchdnn_dnnl_wrapper_t<dnnl_primitive_desc_t> &pdw,
         if (status == dnnl_last_impl_reached) {
             BENCHDNN_PRINT(2, "%s\n", "All implementations were skipped!");
             res->state = SKIPPED;
-            res->reason = skip_reason::skip_impl_hit;
+            res->reason = SKIP_IMPL_HIT;
             pdw.reset(nullptr);
             return OK;
         } else if (status == dnnl_success) {
@@ -387,15 +372,13 @@ template <typename func_t, typename prb_t>
 int create_primitive(benchdnn_dnnl_wrapper_t<dnnl_primitive_t> &primw,
         dnnl_engine_t engine, const func_t &init_pd_func, const prb_t *prb,
         res_t *res, dir_t dir, const_dnnl_primitive_desc_t hint,
-        bool is_service_prim, const_dnnl_memory_desc_t src_md,
-        bool force_f32_dt, bool is_graph_ref = false) {
+        bool is_service_prim, const_dnnl_memory_desc_t src_md) {
     dnnl_status_t status = dnnl_success;
     dnnl_primitive_t prim {};
 
     benchdnn_dnnl_wrapper_t<dnnl_primitive_desc_t> pdw;
 
-    init_pd_args_t<prb_t> init_pd_args(
-            res, engine, prb, dir, hint, src_md, force_f32_dt);
+    init_pd_args_t<prb_t> init_pd_args(res, engine, prb, dir, hint, src_md);
     status = init_pd_func(init_pd_args);
 
     SAFE(check_dnnl_status(status, prb, res), WARN);
@@ -406,10 +389,8 @@ int create_primitive(benchdnn_dnnl_wrapper_t<dnnl_primitive_t> &primw,
     if (res->state == SKIPPED) return OK;
 
     // Check memory requirements if only execution happens.
-    // Note: As a graph may contains moare than one operations with identical
-    // `dir`. Since the mem size check for all the operations are necessary,
-    // the check should not be skipped.
-    SAFE(check_mem_size(pdw, res, dir, /*need_skip=*/!is_graph_ref), WARN);
+    if (bench_mode != bench_mode_t::init && !res->mem_check_done)
+        SAFE(check_mem_size(pdw, res), WARN);
     if (res->state == SKIPPED) return OK;
 
     TIME_C_PRIM(DNN_SAFE(dnnl_primitive_create(&prim, pdw), WARN));
@@ -441,8 +422,6 @@ int check_pd_w_and_wo_attr(dnnl_engine_t engine, const func_t &init_pd_func,
     return OK;
 }
 
-int check_ref_impl_hit(res_t *res);
-
 template <typename func_t, typename prb_t>
 int init_prim(benchdnn_dnnl_wrapper_t<dnnl_primitive_t> &user_prim,
         const func_t &init_pd_func, const prb_t *prb, res_t *res,
@@ -466,8 +445,7 @@ int init_prim(benchdnn_dnnl_wrapper_t<dnnl_primitive_t> &user_prim,
 
         // The first primitive creation using a temporary engine.
         SAFE(create_primitive(primw, engine, init_pd_func, prb, res, dir, hint,
-                     is_service_prim, /* src_md = */ nullptr,
-                     /* force_f32_dt = */ false),
+                     is_service_prim, /* src_md = */ nullptr),
                 WARN);
         if (res->state == SKIPPED) return OK;
     }
@@ -476,8 +454,7 @@ int init_prim(benchdnn_dnnl_wrapper_t<dnnl_primitive_t> &user_prim,
     // The second (if the cache is enabled) primitive creation using the global
     // test engine. This primitive is expected to come from the cache.
     SAFE(create_primitive(primw, get_test_engine(), init_pd_func, prb, res, dir,
-                 hint, is_service_prim, /* src_md = */ nullptr,
-                 /* force_f32_dt = */ false),
+                 hint, is_service_prim, /* src_md = */ nullptr),
             WARN);
     if (res->state == SKIPPED) return OK;
 
@@ -498,8 +475,6 @@ int init_prim(benchdnn_dnnl_wrapper_t<dnnl_primitive_t> &user_prim,
         SAFE(check_pd_w_and_wo_attr(
                      get_test_engine(), init_pd_func, prb, res, dir, hint),
                 WARN);
-        // Check if unexpected ref impl was hit.
-        SAFE(check_ref_impl_hit(res), WARN);
     }
 
     user_prim.reset(primw.release());
@@ -610,9 +585,7 @@ void check_correctness(const prb_t *prb, const std::vector<data_kind_t> &kinds,
 
         // Replace engine kind for repro line from GPU to CPU.
         const auto eng_pos = res->prim_ref_repro.find("engine=gpu");
-        if (eng_pos != std::string::npos)
-            // Replace `g` in `gpu` with `c`
-            res->prim_ref_repro[eng_pos + 7] = 'c';
+        res->prim_ref_repro[eng_pos + 7] = 'c'; // Replace `g` in `gpu` with `c`
 
         BENCHDNN_PRINT(
                 0, "[PRIM_REF][REPRO]: %s\n", res->prim_ref_repro.c_str());
@@ -651,18 +624,16 @@ memory_kind_ext_t str2memory_kind(const char *str);
 float reorder_rescale_factor();
 
 // The function converts a memory descriptor dims into a `dims_t` object under
-// certain rules.
-//
-// `mask` argument picks what dimensions to put into a new object as is.
-// `extend_by_ones` specifies the behavior with dimensions not matched by
-//     `mask`. When set to `true` (the default), a dim value of `1` is used
-//     for a not matched dimension. Thus, `ndims` of a new object will remain
-//     the same as for original md. When set to `false`, a dim is skipped and
-//     the final object could end up with smaller `ndims` (or `size()`) value.
-// `groups` specify a vector of group values which decrease the final dimension
-//     values by dividing on the group size.
-dims_t md2dims(const_dnnl_memory_desc_t md, int mask = -1,
-        bool extend_by_ones = true, const std::vector<int64_t> &groups = {});
+// // certain rules.
+// //
+// // `mask` argument picks what dimensions to put into a new object as is.
+// // `extend_by_ones` specifies the behavior with dimensions not matched by
+// //     `mask`. When set to `true` (the default), a dim value of `1` is used
+// //     for a not matched dimension. Thus, `ndims` of a new object will remain
+// //     the same as for original md. When set to `false`, a dim is skipped and
+// //     the final object may smaller `ndims` (or `size()`) value.
+dims_t md2dims(
+        const_dnnl_memory_desc_t md, int mask = -1, bool extend_by_ones = true);
 
 // Function adjusts data type if fpmath mode is present or sum_dt is different
 // from destination_dt. It is used in `cfg` objects that regulate filling.
@@ -710,8 +681,7 @@ void init_memory_args(dnn_mem_map_t &mem_map, const prb_t *prb,
 
     auto const_pd = query_pd(prim);
     auto const_po = query_post_ops(const_pd);
-    const auto prim_kind = query_prim_kind(const_pd);
-    const auto prop_kind = query_prop_kind(const_pd);
+    auto prim_kind = query_prim_kind(const_pd);
 
     const auto has_runtime_dims = [](const_dnnl_memory_desc_t md) -> bool {
         for (int d = 0; d < query_md_ndims(md); ++d)
@@ -743,58 +713,20 @@ void init_memory_args(dnn_mem_map_t &mem_map, const prb_t *prb,
                     mem_map.emplace(exec_arg + i, dnn_mem_t(md, test_engine));
                 }
             } else {
-                const bool is_arg_in_map
-                        = mem_map.find(exec_arg) != mem_map.end();
                 const auto &md = query_md(const_pd, exec_arg);
-                // Check for ndims is needed when the driver supported args map
-                // contains extra arguments for other purposes.
-                const int ndims = query_md_ndims(md);
-                if (is_arg_in_map && ndims > 0
-                        && dnnl_memory_desc_equal(md, mem_map.at(exec_arg).md_)
-                                == 0) {
-                    // It may happen that the map already has the argument but
-                    // the library requires it in a different format, e.g., RNN
-                    // BWD support on GPU (for better performance). It may also
-                    // happen in a combination with `no_host_memory` modifier,
-                    // which requires the library memories map to handle such
-                    // cases.
-                    assert(!has_runtime_dims(md));
-                    dnn_mem_t new_mem(md, test_engine);
-                    // Reorder user's data from the old memory to the new one.
-                    auto st = new_mem.reorder(mem_map.at(exec_arg));
-                    assert(st == OK);
-                    if (st != OK) return;
-                    mem_map[exec_arg] = std::move(new_mem);
+                if (has_runtime_dims(md)) {
+                    mem_map.emplace(exec_arg,
+                            dnn_mem_t(prb->get_md(exec_arg), test_engine));
                 } else {
-                    if (has_runtime_dims(md)) {
-                        mem_map.emplace(exec_arg,
-                                dnn_mem_t(prb->get_md(exec_arg), test_engine));
-                    } else {
-                        // In case when arguments get updated on backward when
-                        // forward is required, `emplace` guarantees newly
-                        // constructed element will be destroyed if an element
-                        // with a key already present in the map. C++17 could
-                        // use try_emplace instead to mitigate
-                        // construction/destruction overhead.
-                        mem_map.emplace(exec_arg, dnn_mem_t(md, test_engine));
-                    }
+                    // In case when arguments get updated on backward when
+                    // forward is required, `emplace` guarantees newly
+                    // constructed element will be destroyed if an element with
+                    // a key already present in the map. C++17 could use
+                    // try_emplace instead to mitigate construction/destruction
+                    // overhead.
+                    mem_map.emplace(exec_arg, dnn_mem_t(md, test_engine));
                 }
             }
-        }
-    }
-
-    // Drop "destination" memory for in-place case. `args` will take care of
-    // setting proper pointers to make in-place mode happen.
-    // Note: must precede bitwise stash memory insertion to keep numbers
-    // estimated by memory checker correct.
-    if (prb->inplace) {
-        const bool inplace_fwd = (prb->dir & FLAG_FWD);
-        const bool inplace_bwd
-                = (prb->dir & FLAG_BWD) && !is_fwd_prop_kind(prop_kind);
-        if (inplace_fwd || inplace_bwd) {
-            const int inplace_dst_arg
-                    = (prb->dir & FLAG_FWD) ? DNNL_ARG_DST : DNNL_ARG_DIFF_SRC;
-            mem_map[inplace_dst_arg] = dnn_mem_t();
         }
     }
 
@@ -829,6 +761,7 @@ void init_memory_args(dnn_mem_map_t &mem_map, const prb_t *prb,
             const bool has_multiple_args = std::any_of(
                     supported_exec_args.begin(), supported_exec_args.end(),
                     [](int arg) { return arg == DNNL_ARG_MULTIPLE_SRC; });
+            const auto prop_kind = query_prop_kind(const_pd);
             const auto query_arg = is_fwd_prop_kind(prop_kind)
                     ? (has_multiple_args ? DNNL_ARG_MULTIPLE_SRC : DNNL_ARG_SRC)
                     : DNNL_ARG_DIFF_DST;
@@ -879,46 +812,30 @@ void init_memory_args(dnn_mem_map_t &mem_map, const prb_t *prb,
                 dnn_mem_t(ndims, dims.data(), dnnl_f32, tag::axb, test_engine));
     }
 
-    // Dropout
-    if (is_fwd_training(prop_kind) && !prb->attr.dropout.is_def()) {
-        const auto &dropout_md = query_md(const_pd, DNNL_ARG_ATTR_DROPOUT_MASK);
-        mem_map.emplace(
-                DNNL_ARG_ATTR_DROPOUT_MASK, dnn_mem_t(dropout_md, test_engine));
-        int64_t count = 1;
-        auto prob_md = dnn_mem_t::init_md(1, &count, dnnl_f32, tag::abx);
-        mem_map.emplace(DNNL_ARG_ATTR_DROPOUT_PROBABILITY,
-                dnn_mem_t(prob_md, test_engine));
-
-        auto seed_md = dnn_mem_t::init_md(1, &count, dnnl_s32, tag::abx);
-        mem_map.emplace(
-                DNNL_ARG_ATTR_DROPOUT_SEED, dnn_mem_t(seed_md, test_engine));
-    }
-
     // Scales.
     if (!prb->attr.scales.is_def()) {
         const auto &sc = prb->attr.scales;
 
         const auto &src_md = query_md(const_pd, DNNL_ARG_SRC);
         const auto &wei_md = query_md(const_pd, DNNL_ARG_WEIGHTS);
-        const bool has_channel_groups
+        const bool has_groups
                 = (query_md_ndims(src_md) + 1) == query_md_ndims(wei_md);
 
         const auto append_scales = [&](int exec_arg) {
             const int exec_sc_arg = DNNL_ARG_ATTR_SCALES | exec_arg;
             dims_t dims = {};
             int64_t ndims = 1;
-            const auto mask = sc.get_mask(exec_arg, prim_kind,
-                    query_md_ndims(wei_md), has_channel_groups);
-            const auto &groups = sc.get(exec_arg).groups;
+            const auto mask
+                    = sc.get_mask(exec_arg, prim_kind, wei_md, has_groups);
 
             if (mask > 0) {
                 const auto &md = query_md(const_pd, exec_arg);
                 if (has_runtime_dims(md)) {
                     const auto prb_md = prb->get_md(exec_arg);
-                    dims = md2dims(prb_md, mask, false, groups);
+                    dims = md2dims(prb_md, mask, false);
                     ndims = static_cast<int>(dims.size());
                 } else {
-                    dims = md2dims(md, mask, false, groups);
+                    dims = md2dims(md, mask, false);
                     ndims = static_cast<int>(dims.size());
                 }
             } else {
@@ -956,18 +873,16 @@ void init_memory_args(dnn_mem_map_t &mem_map, const prb_t *prb,
             const auto &e = zp.get(exec_arg);
             int64_t ndims = 1;
             dims_t dims = {};
-            const auto mask
-                    = zp.get_mask(exec_arg, prim_kind, query_md_ndims(wei_md));
-            const auto &groups = e.groups;
+            const auto mask = zp.get_mask(exec_arg, prim_kind, wei_md);
 
             if (mask > 0) {
                 const auto &md = query_md(const_pd, exec_arg);
                 if (has_runtime_dims(md)) {
                     const auto prb_md = prb->get_md(exec_arg);
-                    dims = md2dims(prb_md, mask, false, groups);
+                    dims = md2dims(prb_md, mask, false);
                     ndims = static_cast<int>(dims.size());
                 } else {
-                    dims = md2dims(md, mask, false, groups);
+                    dims = md2dims(md, mask, false);
                     ndims = static_cast<int>(dims.size());
                 }
             } else {
@@ -991,13 +906,22 @@ void init_memory_args(dnn_mem_map_t &mem_map, const prb_t *prb,
             }
         }
     }
+}
 
-    // rounding mode
-    if (!prb->attr.rounding_mode.is_def()) {
-        int64_t count = 1;
-        auto seed_md = dnn_mem_t::init_md(1, &count, dnnl_s32, tag::abx);
-        mem_map.emplace(
-                DNNL_ARG_ATTR_ROUNDING_SEED, dnn_mem_t(seed_md, test_engine));
+// Drop "destination" memory for in-place case. `args` will take care of setting
+// proper pointers to make in-place mode happen.
+//
+// Placement handling should happen before fast exiting from `no_host_memory`,
+// otherwise, in-place mode will not be switched on.
+template <typename prb_t>
+void update_inplace_memory_args(
+        dnn_mem_map_t &mem_map, const prb_t *prb, dir_t dir) {
+    const bool inplace_fwd = prb->inplace && (prb->dir & FLAG_FWD);
+    const bool inplace_bwd = prb->inplace && (dir & FLAG_BWD);
+    if (inplace_fwd) {
+        mem_map[DNNL_ARG_DST] = dnn_mem_t();
+    } else if (inplace_bwd) {
+        mem_map[DNNL_ARG_DIFF_SRC] = dnn_mem_t();
     }
 }
 
@@ -1010,6 +934,6 @@ int init_ref_memory_args_default_case(int exec_arg, dnn_mem_t &mem,
         const std::unordered_map<int, fill_cfg_t> &fill_cfg_map = {});
 
 int check_bitwise(dnnl_primitive_t prim, const std::vector<data_kind_t> &kinds,
-        const args_t &args, const attr_t &attr, bool inplace, res_t *res);
+        const args_t &args, bool inplace, res_t *res);
 
 #endif

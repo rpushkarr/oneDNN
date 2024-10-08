@@ -24,8 +24,6 @@
 #include "oneapi/dnnl/dnnl_debug.h"
 #include "oneapi/dnnl/dnnl_types.h"
 
-#include "common/c_types_map.hpp"
-
 const char *dnnl_status2str(dnnl_status_t v) {
     if (v == dnnl_success) return "success";
     if (v == dnnl_out_of_memory) return "out_of_memory";
@@ -54,10 +52,6 @@ const char *dnnl_dt2str(dnnl_data_type_t v) {
     if (v == dnnl_boolean) return "boolean";
     if (v == dnnl_f8_e5m2) return "f8_e5m2";
     if (v == dnnl_f8_e4m3) return "f8_e4m3";
-    if (v == dnnl_s4) return "s4";
-    if (v == dnnl_u4) return "u4";
-    if (v == dnnl_e8m0) return "e8m0";
-    if (v == dnnl_f4_e2m1) return "f4_e2m1";
     if (v == dnnl_data_type_max) return "data_type_max";
     assert(!"unknown dt");
     return "unknown dt";
@@ -96,7 +90,6 @@ const char *dnnl_engine_kind2str(dnnl_engine_kind_t v) {
 const char *dnnl_sparse_encoding2str(dnnl_sparse_encoding_t v) {
     if (v == dnnl_sparse_encoding_undef) return "undef";
     if (v == dnnl_csr) return "csr";
-    if (v == dnnl_coo) return "coo";
     if (v == dnnl_packed) return "packed";
     assert(!"unknown sparse_encoding");
     return "unknown sparse_encoding";
@@ -927,22 +920,8 @@ const char *dnnl_fmt_tag2str(dnnl_format_tag_t v) {
     if (v == dnnl_AcdeB4b8a4b) return "AcdeB4b8a4b";
     if (v == dnnl_Ab4a) return "Ab4a";
     if (v == dnnl_Ab8a) return "Ab8a";
-    if (v == dnnl_Ab32a) return "Ab32a";
     if (v == dnnl_BA4b4a) return "BA4b4a";
     if (v == dnnl_BA8b4a) return "BA8b4a";
-    if (v == dnnl_BA2a24b) return "BA2a24b";
-    if (v == dnnl_aCB2b24c) return "aCB2b24c";
-    if (v == dnnl_BA2a8b) return "BA2a8b";
-    if (v == dnnl_aCB2b8c) return "aCB2b8c";
-    if (v == dnnl_BA8a24b) return "BA8a24b";
-    if (v == dnnl_aCB8b24c) return "aCB8b24c";
-    if (v == dnnl_BA8a16b) return "BA8a16b";
-    if (v == dnnl_aCB8b16c) return "aCB8b16c";
-    if (v == dnnl_BA8a8b) return "BA8a8b";
-    if (v == dnnl_aCB8b8c) return "aCB8b8c";
-    if (v == dnnl_bcad) return "bcad";
-    if (v == dnnl_cabd) return "cabd";
-    if (v == dnnl_dabc) return "dabc";
     if (v == dnnl_format_tag_last) return "format_tag_last";
     if (v == dnnl_x) return "x";
     if (v == dnnl_nc) return "nc";
@@ -1755,7 +1734,6 @@ const char *dnnl_prim_kind2str(dnnl_primitive_kind_t v) {
     if (v == dnnl_layer_normalization) return "layer_normalization";
     if (v == dnnl_group_normalization) return "group_normalization";
     if (v == dnnl_primitive_kind_max) return "primitive_kind_max";
-    if (v == dnnl::impl::primitive_kind::sdpa) return "sdpa";
     assert(!"unknown prim_kind");
     return "unknown prim_kind";
 }
@@ -1859,13 +1837,6 @@ const char *dnnl_scratchpad_mode2str(dnnl_scratchpad_mode_t v) {
     return "unknown scratchpad_mode";
 }
 
-const char *dnnl_rounding_mode2str(dnnl_rounding_mode_t v) {
-    if (v == dnnl_rounding_mode_environment) return "environment";
-    if (v == dnnl_rounding_mode_stochastic) return "stochastic";
-    assert(!"unknown rounding_mode");
-    return "unknown rounding_mode";
-}
-
 const char *dnnl_cpu_isa2str(dnnl_cpu_isa_t v) {
     if (v == dnnl_cpu_isa_default) return "cpu_isa_default";
     if (v == dnnl_cpu_isa_sse41) return "cpu_isa_sse41";
@@ -1876,11 +1847,8 @@ const char *dnnl_cpu_isa2str(dnnl_cpu_isa_t v) {
     if (v == dnnl_cpu_isa_avx512_core) return "cpu_isa_avx512_core";
     if (v == dnnl_cpu_isa_avx512_core_vnni) return "cpu_isa_avx512_core_vnni";
     if (v == dnnl_cpu_isa_avx512_core_bf16) return "cpu_isa_avx512_core_bf16";
-    if (v == dnnl_cpu_isa_avx10_1_512) return "cpu_isa_avx10_1_512";
     if (v == dnnl_cpu_isa_avx512_core_fp16) return "cpu_isa_avx512_core_fp16";
-    if (v == dnnl_cpu_isa_avx10_1_512_amx) return "cpu_isa_avx10_1_512_amx";
     if (v == dnnl_cpu_isa_avx512_core_amx) return "cpu_isa_avx512_core_amx";
-    if (v == dnnl_cpu_isa_avx10_1_512_amx_fp16) return "cpu_isa_avx10_1_512_amx_fp16";
     if (v == dnnl_cpu_isa_avx512_core_amx_fp16) return "cpu_isa_avx512_core_amx_fp16";
     assert(!"unknown cpu_isa");
     return "unknown cpu_isa";

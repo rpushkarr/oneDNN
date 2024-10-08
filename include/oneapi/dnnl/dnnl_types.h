@@ -74,8 +74,6 @@ typedef enum {
     /// only be used to create a primitive descriptor to query the
     /// actual memory descriptor (similar to the format tag `any`).
     dnnl_packed,
-    /// Coordinate Sparse Encoding (COO).
-    dnnl_coo,
 } dnnl_sparse_encoding_t;
 #endif
 
@@ -1024,20 +1022,6 @@ typedef enum {
     dnnl_Ab8a,
     dnnl_BA4b4a,
     dnnl_BA8b4a,
-    dnnl_BA2a24b,
-    dnnl_aCB2b24c,
-    dnnl_BA2a8b,
-    dnnl_aCB2b8c,
-    dnnl_BA8a24b,
-    dnnl_aCB8b24c,
-    dnnl_BA8a16b,
-    dnnl_aCB8b16c,
-    dnnl_BA8a8b,
-    dnnl_aCB8b8c,
-    dnnl_bcad,
-    dnnl_cabd,
-    dnnl_dabc,
-    dnnl_Ab32a,
 
     /// Just a sentinel, not real memory format tag. Must be changed after new
     /// format tag is added.
@@ -2386,15 +2370,6 @@ typedef enum {
     dnnl_scratchpad_mode_user,
 } dnnl_scratchpad_mode_t;
 
-/// Rounding mode
-typedef enum {
-    /// rounding mode dictated by the floating-point environment
-    dnnl_rounding_mode_environment,
-    /// stochastic rounding mode where a random bias is added to the
-    /// trailing mantissa bits before conversion.
-    dnnl_rounding_mode_stochastic,
-} dnnl_rounding_mode_t;
-
 /// @struct dnnl_primitive_attr
 /// @brief An opaque structure for primitive descriptor attributes.
 ///
@@ -2448,8 +2423,6 @@ typedef struct dnnl_primitive *dnnl_primitive_t;
 /// A constant primitive handle.
 typedef const struct dnnl_primitive *const_dnnl_primitive_t;
 
-/// Undefined argument.
-#define DNNL_ARG_UNDEF 0
 /// Source argument #0.
 #define DNNL_ARG_SRC_0 1
 /// A special mnemonic for source argument for primitives that have a
@@ -2631,19 +2604,6 @@ typedef const struct dnnl_primitive *const_dnnl_primitive_t;
 #define DNNL_ARG_DIFF_SCALE 255
 /// A special mnemonic for shift argument of normalization primitives.
 #define DNNL_ARG_DIFF_SHIFT 256
-
-/// Rounding mode seed for stochastic rounding
-/// Single seed needed independently of how many arguments need stochastic rounding
-#define DNNL_ARG_ATTR_ROUNDING_SEED 508
-
-/// Dropout mask output buffer.
-#define DNNL_ARG_ATTR_DROPOUT_MASK 509
-
-/// Dropout probability value passed via a buffer.
-#define DNNL_ARG_ATTR_DROPOUT_PROBABILITY 510
-
-/// Dropout RNG seed value passed via a buffer.
-#define DNNL_ARG_ATTR_DROPOUT_SEED 511
 
 /// Output scaling factors provided at execution time.
 #define DNNL_ARG_ATTR_OUTPUT_SCALES 513
@@ -2877,24 +2837,15 @@ typedef enum {
     /// Intel AVX-512 with float16, Intel DL Boost and bfloat16 support
     /// for Intel Xeon Scalable processor family
     /// and Intel Core processor family.
-    // TODO: Align avx10_1 values to internal representation.
-    dnnl_cpu_isa_avx10_1_512 = 0x1ef,
-    /// @copydoc dnnl_cpu_isa_avx10_1_512
-    dnnl_cpu_isa_avx512_core_fp16 = dnnl_cpu_isa_avx10_1_512,
+    dnnl_cpu_isa_avx512_core_fp16 = 0x1ef,
 
     /// Intel AVX-512 with float16, Intel DL Boost and bfloat16 support and
     /// Intel AMX with 8-bit integer and bfloat16 support
-    // TODO: Align avx10_1 values to internal representation.
-    dnnl_cpu_isa_avx10_1_512_amx = 0xfef,
-    /// @copydoc dnnl_cpu_isa_avx10_1_512_amx
-    dnnl_cpu_isa_avx512_core_amx = dnnl_cpu_isa_avx10_1_512_amx,
+    dnnl_cpu_isa_avx512_core_amx = 0xfef,
 
     /// Intel AVX-512 with float16, Intel DL Boost and bfloat16 support and
     /// Intel AMX with 8-bit integer, bfloat16 and float16 support
-    // TODO: Align avx10_1 values to internal representation.
-    dnnl_cpu_isa_avx10_1_512_amx_fp16 = 0x1fef,
-    /// @copydoc dnnl_cpu_isa_avx10_1_512_amx_fp16
-    dnnl_cpu_isa_avx512_core_amx_fp16 = dnnl_cpu_isa_avx10_1_512_amx_fp16,
+    dnnl_cpu_isa_avx512_core_amx_fp16 = 0x1fef,
 } dnnl_cpu_isa_t;
 
 /// CPU ISA hints flags

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -51,8 +51,8 @@ void print_verbose_header() {
             = backend_registry_t::get_singleton().get_registered_backends();
     for (size_t i = 0; i < backends.size() - 1; ++i) {
         backend_t *bkd = const_cast<backend_t *>(backends[i]);
-        verbose_printf(
-                "info,graph,backend,%zu:%s\n", i, bkd->get_name().c_str());
+        printf("onednn_verbose,info,graph,backend,%zu:%s\n", i,
+                bkd->get_name().c_str());
     }
 }
 
@@ -227,8 +227,6 @@ std::string init_info_partition(const engine_t *engine,
     }
 
     ss << ",fpm:" << fpmath_mode2str(partition.get_pimpl()->get_fpmath_mode());
-
-    ss << "," << compiled_partition->get_pimpl()->str();
 
     ss << "," << partition.get_assigned_backend()->get_name();
 

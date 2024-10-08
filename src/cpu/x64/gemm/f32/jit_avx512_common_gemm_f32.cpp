@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2024 Intel Corporation
+* Copyright 2017-2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -26,7 +26,6 @@
 
 #include "cpu/gemm/f32/gemm_utils_f32.hpp"
 #include "cpu/gemm/f32/ref_gemm_f32.hpp"
-#include "cpu/gemm/gemm.hpp"
 #include "cpu/gemm/gemm_msan_unpoison.hpp"
 
 #include "cpu/x64/jit_generator.hpp"
@@ -62,8 +61,10 @@ using namespace gemm_utils;
 struct xbyak_gemm_t : public jit_generator {
     DECLARE_CPU_JIT_AUX_FUNCTIONS(jit_avx512_common_gemm_f32_xbyak_gemm)
 
-    xbyak_gemm_t(char isTransA, char isTransB, float beta, bool hasBias = false)
-        : jit_generator(jit_name())
+    xbyak_gemm_t(char isTransA, char isTransB, float beta, bool hasBias = false,
+            void *code_ptr = nullptr,
+            size_t code_size = 80 * Xbyak::DEFAULT_MAX_CODE_SIZE)
+        : jit_generator(jit_name(), code_ptr, code_size)
         , isTransA(isTransA)
         , isTransB(isTransB)
         , beta(beta)
@@ -1627,7 +1628,7 @@ dnnl_status_t sgemm_nocopy_driver(const char *transa, const char *transb,
     if (utils::any_null(ker_bn, ker_b1, ker_b0)) return dnnl_runtime_error;
 
     dim_t BM = 4032, BN, BK;
-    if (mayiuse(avx512_core) && __BUILD_GEMM_AVX512) {
+    if (mayiuse(avx512_core)) {
         BN = isTransA ? 384 : 64;
         BK = 384;
     } else {

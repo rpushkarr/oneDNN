@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2022-2024 Intel Corporation
+ * Copyright 2022-2023 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -165,31 +165,6 @@ status_t layout_propagator_for_conv(op_ptr &op, const dnnl::engine &p_engine,
             status = fill_layout_info(dw_bias, dw_bias_opt_mdesc);
         }
         if (status != status::success) return status;
-    }
-
-    if (fusion_info.has_post_binary()) {
-        const auto &post_ops = fusion_info.get_post_ops();
-        for (size_t i = 0; i < post_ops.size(); ++i) {
-            if (!post_ops[i]->is_post_binary()) continue;
-            auto binary = post_ops[i];
-            std::vector<size_t> binary_idx
-                    = binary->get_unfused_input_indices();
-            if (binary_idx.empty()) continue;
-
-            value_ptr binary_unfused_src = op->get_input_value(binary_idx[0]);
-            const auto &binary_unfused_src_opt_mdesc
-                    = pd.query_md(query::exec_arg_md,
-                            DNNL_ARG_SRC_1
-                                    | DNNL_ARG_ATTR_MULTIPLE_POST_OP(
-                                            static_cast<int>(i)));
-            insert_reorder_before(op, binary_idx[0],
-                    binary_unfused_src_opt_mdesc, p_engine, mgr, pd_cache,
-                    rewriter);
-            status = fill_layout_info(
-                    binary_unfused_src, binary_unfused_src_opt_mdesc);
-
-            if (status != status::success) return status;
-        }
     }
     // insert a reorder if output layout is different from output optimal layout
     // 1) output layout is opaque
@@ -759,12 +734,6 @@ status_t layout_propagator_for_layernorm(op_ptr &op,
     status_t status = status::success;
     const auto &pd
             = layernorm_executable_t::create_desc(op, p_engine, mgr, pd_cache);
-
-    insert_reorder_before(
-            op, 0, pd.src_desc(), p_engine, mgr, pd_cache, rewriter);
-    value_ptr src = op->get_input_value(0);
-    status = fill_layout_info(src, pd.src_desc());
-    if (status != status::success) return status;
 
     insert_reorder_after(
             op, 0, pd.dst_desc(), p_engine, mgr, pd_cache, rewriter);
@@ -1508,36 +1477,6 @@ status_t layout_propagator_for_add_zps(std::shared_ptr<op_t> &op,
             "dnnl_add_zps op is only for fusion purpose, we shouldn't do "
             "layout propagation for it");
     return status::invalid_graph_op;
-}
-
-status_t layout_propagator_for_groupnorm(op_ptr &op,
-        const dnnl::engine &p_engine, fusion_info_mgr_t &mgr,
-        pd_cache_t &pd_cache, subgraph_rewriter_t &rewriter) {
-    status_t status = status::success;
-
-    const auto &pd
-            = groupnorm_executable_t::create_desc(op, p_engine, mgr, pd_cache);
-
-    insert_reorder_after(
-            op, 0, pd.dst_desc(), p_engine, mgr, pd_cache, rewriter);
-    value_ptr dst = op->get_output_value(0);
-    status = fill_layout_info(dst, pd.dst_desc());
-    if (status != status::success) return status;
-
-    if (op->num_outputs() > 2) {
-        // keep_stats is true
-        value_ptr mean = op->get_output_value(1);
-        value_ptr variance = op->get_output_value(2);
-        status = fill_layout_info(mean, pd.mean_desc());
-        if (status != status::success) return status;
-        status = fill_layout_info(variance, pd.variance_desc());
-        if (status != status::success) return status;
-    }
-
-    // scratchpad is groupnorm's last output
-    value_ptr scratchpad_val = op->get_output_values().back();
-    status = fill_layout_info(scratchpad_val, pd.scratchpad_desc());
-    return status;
 }
 
 } // namespace dnnl_impl

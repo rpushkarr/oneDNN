@@ -30,11 +30,11 @@
 #include "cpu/x64/cpu_isa_traits.hpp"
 
 // Kernels ISA section for configuring knobs.
-#define __BUILD_GEMM_AMX (BUILD_GEMM_KERNELS_ALL)
-#define __BUILD_GEMM_AVX512 (__BUILD_GEMM_AMX || BUILD_GEMM_AVX512)
-#define __BUILD_GEMM_AVX2 (__BUILD_GEMM_AVX512 || BUILD_GEMM_AVX2)
-#define __BUILD_GEMM_SSE41 (__BUILD_GEMM_AVX2 || BUILD_GEMM_SSE41)
-#define __BUILD_GEMM_NONE (BUILD_GEMM_KERNELS_NONE)
+#define __BUILD_GEMM_AMX BUILD_GEMM_KERNELS_ALL
+#define __BUILD_GEMM_AVX512 __BUILD_GEMM_AMX || BUILD_GEMM_AVX512
+#define __BUILD_GEMM_AVX2 __BUILD_GEMM_AVX512 || BUILD_GEMM_AVX2
+#define __BUILD_GEMM_SSE41 __BUILD_GEMM_AVX2 || BUILD_GEMM_SSE41
+#define __BUILD_GEMM_NONE BUILD_GEMM_KERNELS_NONE
 #else
 #define __BUILD_GEMM_AMX 0
 #define __BUILD_GEMM_AVX512 0
@@ -57,13 +57,13 @@ dnnl_status_t extended_sgemm(const char *transa, const char *transb,
         const float *beta, float *C, const dim_t *ldc,
         const float *bias = nullptr, bool force_jit_gemm = false);
 
-dnnl_status_t gemm_s8u8s32(const char *transa, const char *transb,
+dnnl_status_t gemm_s8x8s32(const char *transa, const char *transb,
         const char *offsetc, const dim_t *m, const dim_t *n, const dim_t *k,
         const float *alpha, const int8_t *a, const dim_t *lda, const int8_t *ao,
         const uint8_t *b, const dim_t *ldb, const uint8_t *bo,
         const float *beta, int32_t *c, const dim_t *ldc, const int32_t *co);
 
-dnnl_status_t gemm_s8s8s32(const char *transa, const char *transb,
+dnnl_status_t gemm_s8x8s32(const char *transa, const char *transb,
         const char *offsetc, const dim_t *m, const dim_t *n, const dim_t *k,
         const float *alpha, const int8_t *a, const dim_t *lda, const int8_t *ao,
         const int8_t *b, const dim_t *ldb, const int8_t *bo, const float *beta,

@@ -22,17 +22,9 @@
 
 #include "common/engine.hpp"
 #include "common/utils.hpp"
-
-#if DNNL_CPU_RUNTIME != DNNL_RUNTIME_NONE
 #include "cpu/cpu_engine.hpp"
-#endif
-
-#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
-#include "xpu/ocl/engine_factory.hpp"
-#endif
-
 #ifdef DNNL_WITH_SYCL
-#include "xpu/sycl/engine_factory.hpp"
+#include "sycl/sycl_engine.hpp"
 #endif
 
 #include "graph/interface/backend.hpp"
@@ -300,16 +292,9 @@ static std::unique_ptr<impl::engine_factory_t> get_engine_factory(
     }
 #endif
 
-#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
-    if (kind == engine_kind::gpu && runtime_kind == runtime_kind::ocl) {
-        return std::unique_ptr<engine_factory_t>(
-                new xpu::ocl::engine_factory_t(kind));
-    }
-#endif
-
 #ifdef DNNL_WITH_SYCL
     if (runtime_kind == impl::runtime_kind::sycl)
-        return xpu::sycl::get_engine_factory(kind);
+        return impl::sycl::get_engine_factory(kind);
 #endif
     return nullptr;
 }

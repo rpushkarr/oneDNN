@@ -24,7 +24,6 @@
 #include "c_types_map.hpp"
 #include "cache_blob.hpp"
 #include "cache_blob_id.hpp"
-#include "cache_hit_types.hpp"
 #include "memory_tracking.hpp"
 #include "nstl.hpp"
 #include "opdesc.hpp"
@@ -171,16 +170,6 @@ struct primitive_desc_t : public c_compatible {
             return arg_usage_t::input;
         if (arg == DNNL_ARG_SCRATCHPAD && !is_zero_md(scratchpad_md()))
             return arg_usage_t::output;
-        if (arg == DNNL_ARG_ATTR_DROPOUT_MASK
-                && !attr()->dropout_.has_default_values())
-            return arg_usage_t::output;
-        if ((arg == DNNL_ARG_ATTR_DROPOUT_PROBABILITY
-                    || arg == DNNL_ARG_ATTR_DROPOUT_SEED)
-                && !attr()->dropout_.has_default_values())
-            return arg_usage_t::input;
-        if ((arg == DNNL_ARG_ATTR_ROUNDING_SEED)
-                && !attr()->rounding_mode_.has_default_values())
-            return arg_usage_t::input;
         for (int idx = 0; idx < attr()->post_ops_.len(); ++idx) {
             using namespace primitive_kind;
             if (post_op_has_proper_input(
@@ -214,8 +203,6 @@ struct primitive_desc_t : public c_compatible {
         switch (arg) {
             case DNNL_ARG_WORKSPACE: return workspace_md(0);
             case DNNL_ARG_SCRATCHPAD: return scratchpad_md(0);
-            case DNNL_ARG_ATTR_DROPOUT_MASK:
-                return &attr()->dropout_.dropout_desc_;
             default: return &glob_zero_md;
         }
     }
@@ -384,39 +371,28 @@ struct primitive_desc_t : public c_compatible {
     }
 
     virtual status_t create_primitive(
-            std::pair<std::shared_ptr<primitive_t>, cache_state_t> &primitive,
+            std::pair<std::shared_ptr<primitive_t>, bool> &primitive,
             engine_t *engine, const cache_blob_t &cache_blob) const = 0;
 
     // This is a proxy interface that is used for creating nested primitives.
-    // It ignores the cache_state_t value that indicates whether the requested primitive
+    // It ignores the bool value that indicates whether the requested primitive
     // was taken from cache.
     status_t create_primitive(std::shared_ptr<primitive_t> &primitive,
             engine_t *engine,
             const cache_blob_t &cache_blob = cache_blob_t()) const {
-        std::pair<std::shared_ptr<primitive_t>, cache_state_t> p;
-        status_t status = create_primitive_nested(p, engine, cache_blob);
-        primitive = p.first;
-        return status;
-    }
-
-    // This is a proxy interface that is used for explicitly creating nested primitives,
-    // This version is used when cache_state_t is required for further analysis
-    status_t create_primitive_nested(
-            std::pair<std::shared_ptr<primitive_t>, cache_state_t> &primitive,
-            engine_t *engine,
-            const cache_blob_t &cache_blob = cache_blob_t()) const {
+        std::pair<std::shared_ptr<primitive_t>, bool> p;
         if (get_verbose(verbose_t::debuginfo) >= 1) {
             double start_ms = get_msec();
-            CHECK(create_primitive(primitive, engine, cache_blob));
+            CHECK(create_primitive(p, engine, cache_blob));
             double duration_ms = get_msec() - start_ms;
-            if (cache_blob) primitive.second = cache_state_t::persistent_hit;
-            const char *str = cache_state2str(primitive.second);
-
+            const char *str = p.second ? ":cache_hit" : ":cache_miss";
+            if (cache_blob) str = ":from_cache_blob";
             VPROF(start_ms, primitive, create_nested, str, info(engine),
                     duration_ms);
         } else {
-            CHECK(create_primitive(primitive, engine, cache_blob));
+            CHECK(create_primitive(p, engine, cache_blob));
         }
+        primitive = p.first;
         return status::success;
     }
 
@@ -499,10 +475,8 @@ protected:
         return new_pd.release(); \
     } \
     status_t create_primitive( \
-            std::pair<std::shared_ptr<impl::primitive_t>, cache_state_t> \
-                    &primitive, \
-            dnnl::impl::engine_t *engine, const cache_blob_t &cache_blob) \
-            const override { \
+            std::pair<std::shared_ptr<primitive_t>, bool> &primitive, \
+            engine_t *engine, const cache_blob_t &cache_blob) const override { \
         return primitive_t::create_primitive_common<impl_type, pd_t>( \
                 primitive, this, engine, use_global_scratchpad, cache_blob); \
     } \
@@ -510,7 +484,7 @@ protected:
     template <typename pd_t> \
     friend status_t primitive_desc_t::create(primitive_desc_t **pd, \
             const op_desc_t *adesc, const primitive_attr_t *attr, \
-            dnnl::impl::engine_t *engine, const primitive_desc_t *hint_fwd);
+            engine_t *engine, const primitive_desc_t *hint_fwd);
 
 #define DECLARE_COMMON_PD_T_USE_GLOBAL_SCRATCHPAD(impl_name, impl_type) \
     DECLARE_COMMON_PD_t(impl_name, impl_type, true)

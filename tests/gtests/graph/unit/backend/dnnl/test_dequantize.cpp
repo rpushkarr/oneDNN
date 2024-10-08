@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -213,7 +213,7 @@ TEST(test_dequantize_execute, DequantizePerChannelSymmetric) {
     }
 }
 
-TEST(test_dequantize_execute, DynamicDequantizeS32ZpsPerTensor_CPU) {
+TEST(test_dequantize_execute, DynamicDequantizeS32ZpsPerTensor) {
     // default engine kind is cpu.
     graph::engine_t *eng = get_engine();
 
@@ -286,7 +286,7 @@ TEST(test_dequantize_execute, DynamicDequantizeS32ZpsPerTensor_CPU) {
     }
 }
 
-TEST(test_dequantize_execute, DynamicDequantizeS8ZpsPerTensor_CPU) {
+TEST(test_dequantize_execute, DynamicDequantizeS8ZpsPerTensor) {
     // default engine kind is cpu.
     graph::engine_t *eng = get_engine();
 
@@ -359,7 +359,7 @@ TEST(test_dequantize_execute, DynamicDequantizeS8ZpsPerTensor_CPU) {
     }
 }
 
-TEST(test_dequantize_execute, DynamicDequantizeNoZpsPerTensor_CPU) {
+TEST(test_dequantize_execute, DynamicDequantizeNoZpsPerTensor) {
     // default engine kind is cpu.
     graph::engine_t *eng = get_engine();
 

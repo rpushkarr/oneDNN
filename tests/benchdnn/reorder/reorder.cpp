@@ -140,16 +140,15 @@ int compare_compensation(const prb_t *prb, dnn_mem_map_t &mem_map,
 dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
     const prb_t *prb = init_pd_args.prb;
     res_t *res = init_pd_args.res;
-    bool force_f32_dt = init_pd_args.force_f32_dt;
 
     auto dims = prb->dims;
     for (int d = 0; d < prb->ndims; ++d)
         if (prb->runtime_dim_mask & (1 << d)) dims[d] = DNNL_RUNTIME_DIM_VAL;
 
-    auto src_d = dnn_mem_t::init_md(prb->ndims, dims.data(),
-            force_f32_dt ? dnnl_f32 : prb->sdt, prb->stag, prb->strides[0]);
-    auto dst_d = dnn_mem_t::init_md(prb->ndims, dims.data(),
-            force_f32_dt ? dnnl_f32 : prb->ddt, prb->dtag, prb->strides[1]);
+    auto src_d = dnn_mem_t::init_md(
+            prb->ndims, dims.data(), prb->sdt, prb->stag, prb->strides[0]);
+    auto dst_d = dnn_mem_t::init_md(
+            prb->ndims, dims.data(), prb->ddt, prb->dtag, prb->strides[1]);
 
     // Prepare and assign extra for dst_md.
     auto &extra = static_cast<dnnl_memory_desc_t>(dst_d)->extra;
@@ -220,8 +219,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
     }
 #endif
     if (!scales_ok) {
-        res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
+        res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
         return;
     }
 
@@ -246,16 +244,14 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
         }
 
         if (!dt_ok || !attr_ok || !rt_ok || !masks_ok) {
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
             return;
         }
 
 #if !defined(DNNL_X64) || DNNL_X64 == 0
         // Simple reorder doesn't provide decent coverage for compensated cases.
         // Shut them down unconditionally by default.
-        res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
+        res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
         return;
 #endif
     }
@@ -266,8 +262,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
     const auto &dst_scales = prb->attr.scales.get(DNNL_ARG_DST);
     if (!dst_scales.is_def() && attr_t::get_default_mask(dst_scales.policy) > 0
             && prb->runtime_dim_mask != 0) {
-        res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
+        res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
         return;
     }
 
@@ -278,21 +273,12 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
         if (attr_t::get_default_mask(src_scales.policy)
                         != attr_t::get_default_mask(dst_scales.policy)
                 && prb->is_reorder_with_compensation(FLAG_ANY)) {
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
             return;
         }
     }
 
     if (is_cpu()) {
-        // Int4 reorder support is limited on CPU.
-        if (sdt == dnnl_s4 || ddt == dnnl_s4 || sdt == dnnl_u4
-                || ddt == dnnl_u4) {
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
-            return;
-        }
-
         // CPU reorder doesn't support (xf8,xf16)<-->s32 combinations.
         const bool s32_src_ok = IMPLICATION(sdt == dnnl_s32,
                 ddt != dnnl_f8_e5m2 && ddt != dnnl_f8_e4m3 && ddt != dnnl_bf16
@@ -301,8 +287,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                 sdt != dnnl_f8_e5m2 && sdt != dnnl_f8_e4m3 && sdt != dnnl_bf16
                         && sdt != dnnl_f16);
         if (!s32_src_ok || !s32_dst_ok) {
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
             return;
         }
 
@@ -312,8 +297,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
         const bool f16_dst_ok = IMPLICATION(
                 ddt == dnnl_f16, sdt == dnnl_f16 || sdt == dnnl_f32);
         if (!f16_src_ok || !f16_dst_ok) {
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
             return;
         }
 
@@ -325,8 +309,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                 = IMPLICATION(sdt == dnnl_f8_e5m2 || sdt == dnnl_f8_e4m3,
                         ddt == dnnl_f16 || ddt == dnnl_f32);
         if (!xf8_src_ok || !xf8_dst_ok) {
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
             return;
         }
     }
@@ -337,8 +320,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
         // in kernels directly, but s8s8 instructions are available in HW.
         if (prb->runtime_dim_mask != 0
                 || prb->is_reorder_with_compensation(FLAG_ANY)) {
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
             return;
         }
 
@@ -346,8 +328,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
         const bool is_xf8 = prb->sdt == dnnl_f8_e5m2 || prb->sdt == dnnl_f8_e4m3
                 || prb->ddt == dnnl_f8_e5m2 || prb->ddt == dnnl_f8_e4m3;
         if (is_xf8) {
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
             return;
         }
     }
@@ -358,18 +339,14 @@ void skip_invalid_prb(const prb_t *prb, res_t *res) {
 #if DNNL_CPU_RUNTIME == DNNL_RUNTIME_NONE \
         || DNNL_GPU_RUNTIME == DNNL_RUNTIME_NONE
     auto cross_engine = prb->cross_engine;
-    if (cross_engine == CPU2GPU || cross_engine == GPU2CPU) {
-        res->state = SKIPPED;
-        res->reason = skip_reason::invalid_case;
-        return;
-    }
+    if (cross_engine == CPU2GPU || cross_engine == GPU2CPU)
+        res->state = SKIPPED, res->reason = INVALID_CASE;
 #endif
 
     // Zero-points can't be used with sum post-op.
     if (!prb->attr.zero_points.is_def(DNNL_ARG_DST)
             && prb->attr.post_ops.find(attr_t::post_ops_t::kind_t::SUM) != -1) {
-        res->state = SKIPPED;
-        res->reason = skip_reason::invalid_case;
+        res->state = SKIPPED, res->reason = INVALID_CASE;
         return;
     }
 
@@ -379,8 +356,7 @@ void skip_invalid_prb(const prb_t *prb, res_t *res) {
     const bool is_dst_zp_ok = is_integral_dt(prb->ddt)
             || prb->attr.zero_points.is_def(DNNL_ARG_DST);
     if (!(is_src_zp_ok && is_dst_zp_ok)) {
-        res->state = SKIPPED;
-        res->reason = skip_reason::invalid_case;
+        res->state = SKIPPED, res->reason = INVALID_CASE;
         return;
     }
 }
@@ -418,7 +394,7 @@ std::vector<int> supported_exec_args(dir_t dir) {
 };
 
 int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
-        dnnl_primitive_t prim, const prb_t *prb, res_t *res,
+        dnnl_primitive_t prim, const prb_t *prb, res_t *res, dir_t dir,
         dnnl_primitive_t prim_ref) {
     if (has_bench_mode_modifier(mode_modifier_t::no_host_memory)) return OK;
 
@@ -496,8 +472,9 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     dnn_mem_map_t mem_map, ref_mem_map;
     init_memory_args<prb_t>(mem_map, prb, prim, supported_exec_args(prb->dir));
-    TIME_FILL(SAFE(
-            init_ref_memory_args(ref_mem_map, mem_map, prim, prb, res), WARN));
+    TIME_FILL(SAFE(init_ref_memory_args(
+                           ref_mem_map, mem_map, prim, prb, res, prb->dir),
+            WARN));
 
     args_t args(mem_map), ref_args(ref_mem_map);
 
@@ -522,7 +499,7 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
             compare_compensation(prb, mem_map, ref_mem_map, res);
         }
     }
-    SAFE(check_bitwise(prim, {DST}, args, prb->attr, prb->inplace, res), WARN);
+    SAFE(check_bitwise(prim, {DST}, args, prb->inplace, res), WARN);
 
     return measure_perf(prb->ctx_exe, res, prim, args);
 }

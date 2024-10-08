@@ -202,19 +202,11 @@ public:
         return *pos;
     }
 
-    bool has_post_binary() const {
-        auto pos = std::find_if(post_ops_.begin(), post_ops_.end(),
-                [](const std::shared_ptr<meta_op_t> &mop) {
-                    return mop->is_post_binary();
-                });
-        return pos != post_ops_.end();
-    }
-
-    bool with_runtime_zero_points(bool is_input, size_t index) const {
+    bool with_runtime_zero_points(bool is_input, size_t indice) const {
         if (is_input) {
-            if (input_zps_.find(index) == input_zps_.end()) return false;
+            if (input_zps_.find(indice) == input_zps_.end()) return false;
             const op_t *zp_op
-                    = const_cast<op_t *>(input_zps_.at(index)->get_op());
+                    = const_cast<op_t *>(input_zps_.at(indice)->get_op());
             if (zp_op->has_attr(op_attr::with_runtime_zps)) {
                 return zp_op->get_attr<bool>(op_attr::with_runtime_zps);
             } else {
@@ -231,11 +223,11 @@ public:
         }
     }
 
-    bool with_runtime_scales(bool is_input, size_t index) const {
+    bool with_runtime_scales(bool is_input, size_t indice) const {
         if (is_input) {
-            if (input_scales_.find(index) == input_scales_.end()) return false;
+            if (input_scales_.find(indice) == input_scales_.end()) return false;
             const op_t *zp_op
-                    = const_cast<op_t *>(input_scales_.at(index)->get_op());
+                    = const_cast<op_t *>(input_scales_.at(indice)->get_op());
             if (zp_op->has_attr(op_attr::with_runtime_scales)) {
                 return zp_op->get_attr<bool>(op_attr::with_runtime_scales);
             } else {

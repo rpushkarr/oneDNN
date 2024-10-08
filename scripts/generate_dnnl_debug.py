@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 ################################################################################
-# Copyright 2018-2024 Intel Corporation
+# Copyright 2018-2023 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -99,8 +99,6 @@ def source(body):
 #include "oneapi/dnnl/dnnl_debug.h"
 #include "oneapi/dnnl/dnnl_types.h"
 
-#include "common/c_types_map.hpp"
-
 %s
 """
         % body
@@ -141,9 +139,6 @@ const char *fpmath_mode2str(dnnl_fpmath_mode_t mode);
 
 /* accumulation mode */
 const char *accumulation_mode2str(dnnl_accumulation_mode_t mode);
-
-/* rounding mode */
-const char *rounding_mode2str(dnnl_rounding_mode_t mode);
 
 #endif
 """
@@ -199,10 +194,6 @@ const char *fpmath_mode2str(dnnl_fpmath_mode_t mode) {
 const char *accumulation_mode2str(dnnl_accumulation_mode_t mode) {
     return dnnl_accumulation_mode2str(mode);
 }
-
-const char *rounding_mode2str(dnnl_rounding_mode_t mode) {
-    return dnnl_rounding_mode2str(mode);
-}
 """
         % body.rstrip()
     )
@@ -237,7 +228,6 @@ def sanitize_value(v):
         return "any"
     v = v.split("dnnl_fpmath_mode_")[-1]
     v = v.split("dnnl_accumulation_mode_")[-1]
-    v = v.split("dnnl_rounding_mode_")[-1]
     v = v.split("dnnl_scratchpad_mode_")[-1]
     v = v.split("dnnl_")[-1]
     return v
@@ -259,8 +249,6 @@ def func_to_str(enum, values):
     func += func_to_str_decl(enum) + " {\n"
     for v in values:
         func += '%sif (v == %s) return "%s";\n' % (indent, v, sanitize_value(v))
-    if (enum == "dnnl_primitive_kind_t"):
-        func += '%sif (v == dnnl::impl::primitive_kind::sdpa) return "sdpa";\n' % indent
     func += '%sassert(!"unknown %s");\n' % (indent, abbrev)
     func += '%sreturn "unknown %s";\n}\n' % (indent, abbrev)
     return func

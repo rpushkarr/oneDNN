@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2024 Intel Corporation
+* Copyright 2016-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 #include <stdint.h>
 
 #include "oneapi/dnnl/dnnl.h"
+#include "oneapi/dnnl/dnnl.hpp"
 
 #ifdef DNNL_WITH_SYCL
 #include "oneapi/dnnl/dnnl_sycl.h"
@@ -71,7 +72,7 @@ size_t memory_desc_map_size(const memory_desc_t *md, int index = 0) {
 dnnl_memory::dnnl_memory(dnnl::impl::engine_t *engine,
         const dnnl::impl::memory_desc_t *md, const std::vector<unsigned> &flags,
         const std::vector<void *> &handles)
-    : engine_(engine), md_(*md), counter_(1) {
+    : engine_(engine), md_(*md) {
 
     const size_t nhandles = handles.size();
     std::vector<std::unique_ptr<dnnl::impl::memory_storage_t>> mem_storages(
@@ -91,26 +92,14 @@ dnnl_memory::dnnl_memory(dnnl::impl::engine_t *engine,
 dnnl_memory::dnnl_memory(dnnl::impl::engine_t *engine,
         const dnnl::impl::memory_desc_t *md,
         std::unique_ptr<dnnl::impl::memory_storage_t> &&memory_storage)
-    : engine_(engine), md_(*md), counter_(1) {
+    : engine_(engine), md_(*md) {
     this->reset_memory_storage(std::move(memory_storage));
 }
-
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-dnnl_memory::dnnl_memory(dnnl::impl::engine_t *engine,
-        const dnnl::impl::memory_desc_t *md,
-        std::vector<std::unique_ptr<dnnl::impl::memory_storage_t>>
-                &&memory_storages)
-    : engine_(engine), md_(*md), counter_(1) {
-    memory_storages_ = std::move(memory_storages);
-}
-#endif
 
 status_t dnnl_memory::set_data_handle(void *handle, int index) const {
     using namespace dnnl::impl;
     void *old_handle;
-    auto *ms = memory_storage(index);
-    if (!ms) return status::invalid_arguments;
-    CHECK(ms->get_data_handle(&old_handle));
+    CHECK(memory_storage(index)->get_data_handle(&old_handle));
     if (handle != old_handle) {
         CHECK(memory_storage(index)->set_data_handle(handle));
     }
@@ -154,10 +143,8 @@ status_t dnnl_memory_create(memory_t **memory, const memory_desc_t *md,
     if (md == nullptr) md = &z_md;
 
     const auto mdw = memory_desc_wrapper(md);
-    VCHECK_MEMORY(
-            !mdw.format_any(), invalid_arguments, VERBOSE_UNSUPPORTED_TAG);
-    VCHECK_MEMORY(!mdw.has_runtime_dims_or_strides(), invalid_arguments,
-            VERBOSE_UNSUPPORTED_MEM_STRIDE);
+    if (mdw.format_any() || mdw.has_runtime_dims_or_strides())
+        return invalid_arguments;
 
     unsigned flags = (handle == DNNL_MEMORY_ALLOCATE)
             ? memory_flags_t::alloc
@@ -166,14 +153,13 @@ status_t dnnl_memory_create(memory_t **memory, const memory_desc_t *md,
     auto _memory = new memory_t(engine, md, flags, handle_ptr);
     if (_memory == nullptr) return out_of_memory;
     if (_memory->memory_storage() == nullptr) {
-        _memory->release();
+        delete _memory;
         return out_of_memory;
     }
     *memory = _memory;
     return success;
 }
 
-#ifdef DNNL_EXPERIMENTAL_SPARSE
 status_t dnnl_memory_create_v2(memory_t **memory, const memory_desc_t *md,
         engine_t *engine, int nhandles, void **handles) {
     const bool args_ok = !any_null(memory, engine, handles) && nhandles > 0;
@@ -182,17 +168,15 @@ status_t dnnl_memory_create_v2(memory_t **memory, const memory_desc_t *md,
 #if DNNL_CPU_RUNTIME != DNNL_RUNTIME_SYCL
     if (engine->kind() == engine_kind::gpu)
 #endif
-        return dnnl_sycl_interop_memory_create_v2(
-                memory, md, engine, dnnl_sycl_interop_usm, nhandles, handles);
+        return dnnl_sycl_interop_memory_create(
+                memory, md, engine, dnnl_sycl_interop_usm, handles[0]);
 #endif
     memory_desc_t z_md = types::zero_md();
     if (md == nullptr) md = &z_md;
 
     const auto mdw = memory_desc_wrapper(md);
-    VCHECK_MEMORY(
-            !mdw.format_any(), invalid_arguments, VERBOSE_UNSUPPORTED_TAG);
-    VCHECK_MEMORY(!mdw.has_runtime_dims_or_strides(), invalid_arguments,
-            VERBOSE_UNSUPPORTED_MEM_STRIDE);
+    if (mdw.format_any() || mdw.has_runtime_dims_or_strides())
+        return invalid_arguments;
 
     std::vector<unsigned> flags_vec(nhandles);
     std::vector<void *> handles_vec(nhandles);
@@ -209,14 +193,13 @@ status_t dnnl_memory_create_v2(memory_t **memory, const memory_desc_t *md,
     if (_memory == nullptr) return out_of_memory;
     for (size_t i = 0; i < handles_vec.size(); i++) {
         if (_memory->memory_storage((int)i) == nullptr) {
-            _memory->release();
+            delete _memory;
             return out_of_memory;
         }
     }
     *memory = _memory;
     return success;
 }
-#endif
 
 status_t dnnl_memory_get_memory_desc(
         const memory_t *memory, const memory_desc_t **md) {
@@ -265,10 +248,9 @@ status_t dnnl_memory_set_data_handle_v2(
 
 status_t dnnl_memory_map_data_v2(
         const memory_t *memory, void **mapped_ptr, int index) {
-    VCHECK_MEMORY(
-            !any_null(memory, mapped_ptr), invalid_arguments, VERBOSE_NULL_ARG);
-    VCHECK_MEMORY((index >= 0 && index < (int)memory->get_num_handles()),
-            invalid_arguments, VERBOSE_INVALID_MEM_IDX);
+    const bool args_ok = !any_null(memory, mapped_ptr)
+            && (index >= 0 && index < (int)memory->get_num_handles());
+    if (!args_ok) return invalid_arguments;
 
     const memory_desc_t *md = memory->md();
     // See caveats in the comment to `memory_desc_map_size()` function.
@@ -287,10 +269,9 @@ status_t dnnl_memory_map_data_v2(
 
 status_t dnnl_memory_unmap_data_v2(
         const memory_t *memory, void *mapped_ptr, int index) {
-    VCHECK_MEMORY(!any_null(memory), invalid_arguments, VERBOSE_NULL_ARG);
-    VCHECK_MEMORY((index >= 0 && index < (int)memory->get_num_handles()),
-            invalid_arguments, VERBOSE_INVALID_MEM_IDX);
-
+    const bool args_ok = !any_null(memory)
+            && (index >= 0 && index < (int)memory->get_num_handles());
+    if (!args_ok) return invalid_arguments;
     return memory->memory_storage(index)->unmap_data(mapped_ptr, nullptr);
 }
 
@@ -303,7 +284,7 @@ status_t dnnl_memory_unmap_data(const memory_t *memory, void *mapped_ptr) {
 }
 
 status_t dnnl_memory_destroy(memory_t *memory) {
-    if (memory != nullptr) memory->release();
+    delete memory;
     return success;
 }
 

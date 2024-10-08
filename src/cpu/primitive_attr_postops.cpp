@@ -260,19 +260,6 @@ status_t ref_post_ops_t::init(const memory_desc_t *dst_md) {
     return status::success;
 }
 
-float ref_dropout(
-        float src, uint8_t *mask, dim_t offset, float p, int64_t seed) {
-    // Note: as this is a reference implementation, it's not intended to be
-    // efficient. For optimized versions, `1/(1-p)` should be passed as a
-    // single value computed once to avoid division for every element.
-    float inv_q = (p != 1.f) ? 1.f / (1.f - p) : 0.f;
-    uint32_t r = philox4x32(offset, seed);
-    p = std::max(std::min(p, 1.f), 0.f);
-    uint8_t m = (r > double(std::numeric_limits<uint32_t>::max()) * p);
-    mask[offset] = m;
-    return (m) ? src * inv_q : 0;
-}
-
 void ref_post_ops_t::execute(float &res, const args_t &args) const {
     if (po_.len() == 0) return;
 

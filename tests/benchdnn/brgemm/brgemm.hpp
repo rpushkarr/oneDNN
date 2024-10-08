@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2024 Intel Corporation
+* Copyright 2022-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -23,21 +23,10 @@
 
 #include "oneapi/dnnl/dnnl.h"
 
-#if (DNNL_CPU_RUNTIME != DNNL_RUNTIME_NONE)
-#if !defined(DNNL_EXPERIMENTAL_UKERNEL)
-
-#if defined(DNNL_X64) && DNNL_X64 == 1
+#if defined(DNNL_X64) && DNNL_X64 == 1 \
+        && (DNNL_CPU_RUNTIME != DNNL_RUNTIME_NONE)
 #include "src/cpu/x64/brgemm/brgemm.hpp"
-#elif defined(DNNL_AARCH64) && DNNL_AARCH64 == 1
-#include "src/cpu/aarch64/brgemm/brgemm.hpp"
 #endif
-
-#else // !defined(DNNL_EXPERIMENTAL_UKERNEL)
-
-#include "oneapi/dnnl/dnnl_ukernel.h"
-
-#endif // !defined(DNNL_EXPERIMENTAL_UKERNEL)
-#endif // (DNNL_CPU_RUNTIME != DNNL_RUNTIME_NONE)
 
 #include "common.hpp"
 #include "dnnl_common.hpp"
@@ -58,14 +47,13 @@ struct settings_t : public base_settings_t {
     prb_vdims_t prb_vdims;
 
     std::vector<std::vector<dnnl_data_type_t>> dt {{dnnl_f32}};
-    std::vector<std::string> stag {tag::abx}, wtag {tag::abx}, dtag {tag::abx};
-    std::vector<vdims_t> strides {vdims_t(STRIDES_SIZE)};
+    std::vector<std::string> stag {tag::abx}, wtag {tag::undef},
+            dtag {tag::abx};
     std::vector<std::vector<int64_t>> ld {{}};
     std::vector<dnnl_data_type_t> bia_dt {dnnl_data_type_undef};
     std::vector<int> batch_size {1};
     std::vector<float> alpha {1.f}, beta {0.f};
     std::vector<std::string> brgemm_attr {std::string()};
-    std::vector<std::string> batch_kind {"addr"};
 
     const char *perf_template_csv() const {
         static const std::string args = "";
@@ -78,28 +66,26 @@ struct settings_t : public base_settings_t {
 struct prb_t : public prb_vdims_t {
     prb_t(const prb_vdims_t &prb_vdims, const std::vector<dnnl_data_type_t> &dt,
             const std::string &stag, const std::string &wtag,
-            const std::string &dtag, const vdims_t &strides,
-            const std::vector<int64_t> &ld, dnnl_data_type_t bia_dt,
-            float alpha, float beta, int batch_size,
-            const std::string &brgemm_attr, const std::string &batch_kind,
-            const attr_t &attr, const thr_ctx_t &ctx_init,
-            const thr_ctx_t &ctx_exe)
+            const std::string &dtag, const std::vector<int64_t> &ld,
+            dnnl_data_type_t bia_dt, float alpha, float beta, int batch_size,
+            const std::string &brgemm_attr, const attr_t &attr,
+            const thr_ctx_t &ctx_init, const thr_ctx_t &ctx_exe)
         : prb_vdims_t(prb_vdims)
         , dt(dt)
         , stag(stag)
         , wtag(wtag)
         , dtag(dtag)
-        , strides(strides)
         , ld(ld)
         , bia_dt(bia_dt)
         , alpha(alpha)
         , beta(beta)
         , batch_size(batch_size)
         , brgemm_attr(brgemm_attr)
-        , batch_kind(batch_kind)
         , attr(attr)
         , ctx_init(ctx_init)
-        , ctx_exe(ctx_exe) {
+        , ctx_exe(ctx_exe)
+        , scales(NULL)
+        , dst_scales(NULL) {
 
         // Broadcast data types if needed
         if (dt.size() == 1) {
@@ -117,11 +103,20 @@ struct prb_t : public prb_vdims_t {
 
         const auto nelems = std::accumulate(dst_dims.begin(), dst_dims.end(),
                 (dnnl_dim_t)1, std::multiplies<dnnl_dim_t>());
-        ops = 2. * nelems * k * batch_size;
+        ops = 2. * nelems * k;
 
-        check_block_size();
+        generate_oscales();
+        generate_dst_scales();
+        src_zp = generate_zero_points(DNNL_ARG_SRC, attr.zero_points, k);
+        dst_zp = generate_zero_points(DNNL_ARG_DST, attr.zero_points, n);
 
         repro = set_repro_line(); // must be last in ctor to collect right info
+    }
+    ~prb_t() {
+        zfree(scales);
+        zfree(dst_scales);
+        zfree(src_zp);
+        zfree(dst_zp);
     }
 
     int64_t m, n, k;
@@ -130,18 +125,18 @@ struct prb_t : public prb_vdims_t {
     dir_t dir = FWD_I;
     std::vector<dnnl_data_type_t> dt;
     std::string stag, wtag, dtag;
-    vdims_t strides;
     std::vector<int64_t> ld;
     dnnl_data_type_t bia_dt;
     float alpha, beta;
     int64_t batch_size;
     std::string brgemm_attr;
-    std::string batch_kind;
 
     attr_t attr;
     thr_ctx_t ctx_init, ctx_exe;
 
     double ops;
+    float *scales, *dst_scales;
+    int32_t *src_zp, *dst_zp;
 
     const dims_t &src_dims() const { return vdims[0]; }
     const dims_t &weights_dims() const { return vdims[1]; }
@@ -171,8 +166,8 @@ struct prb_t : public prb_vdims_t {
         const int64_t ldb = rnd_up(n, 16);
         return ldb;
     }
-    int64_t get_ldc() const {
-        if (use_dst_as_acc()) return get_ldd();
+    int64_t get_ldc(bool use_dst_as_acc) const {
+        if (use_dst_as_acc) return get_ldd();
         return n;
     }
     int64_t get_ldd() const {
@@ -183,19 +178,10 @@ struct prb_t : public prb_vdims_t {
         return n;
     }
 
-    int64_t get_src_batch_offset() const {
-        return k * dnnl_data_type_size(src_dt());
-    }
-    int64_t get_wei_batch_offset() const {
-        return get_ldb() * k * dnnl_data_type_size(wei_dt());
-    }
-
-    bool use_dst_as_acc() const {
-        if (bia_dt == dnnl_data_type_undef && acc_dt() == dst_dt()
-                && attr.is_def(/* skip_fmpath = */ true))
-            return true;
-        return false;
-    }
+    void generate_oscales();
+    void generate_dst_scales();
+    int32_t *generate_zero_points(
+            int arg, const attr_t::zero_points_t &zero_points, int N);
 
     // Used to construct memory desc when dimensions are runtime since such mds
     // can't be used directly from query and memory objects can't be constructed.
@@ -204,14 +190,14 @@ struct prb_t : public prb_vdims_t {
         return make_benchdnn_dnnl_wrapper<dnnl_memory_desc_t>(nullptr);
     }
 
+    BENCHDNN_DISALLOW_COPY_AND_ASSIGN(prb_t);
+
     const char *str() const { return repro.c_str(); }
 
 private:
     std::string repro;
 
     std::string set_repro_line();
-
-    void check_block_size() const;
 };
 
 // TODO: not supported as of now.

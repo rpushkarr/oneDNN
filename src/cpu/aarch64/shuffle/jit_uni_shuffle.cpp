@@ -1,6 +1,6 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
-* Copyright 2022-2024 FUJITSU LIMITED
+* Copyright 2020-2022 Intel Corporation
+* Copyright 2022 FUJITSU LIMITED
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@
 #include "common/bfloat16.hpp"
 #include "common/c_types_map.hpp"
 #include "common/dnnl_thread.hpp"
-#include "common/math_utils.hpp"
 #include "common/type_helpers.hpp"
 
 #include "cpu/aarch64/jit_generator.hpp"
@@ -35,7 +34,6 @@ template <cpu_isa_t isa>
 status_t jit_uni_shuffle_t<isa>::pd_t::init(engine_t *engine) {
     using namespace format_tag;
     using namespace data_type;
-    using namespace types;
 
     const memory_desc_wrapper src_d(is_fwd() ? src_md() : diff_src_md());
     const memory_desc_wrapper dst_d(is_fwd() ? dst_md() : diff_dst_md());
@@ -60,10 +58,7 @@ status_t jit_uni_shuffle_t<isa>::pd_t::init(engine_t *engine) {
     if (blocked_format == format_tag::undef) return status::unimplemented;
 
     conf_.blk_size = src_d.blocking_desc().strides[ndims() - 1];
-    /* Because "ST1H { <Zt>.S }, <Pg>, [<Xn|SP>, <Zm>.S, UXTW #1]" is used
-       to gather data for bf16, simd_w must be calculated
-       with sizeof(uint32_t). */
-    conf_.simd_w = cpu_isa_traits<isa>::vlen / sizeof(uint32_t);
+    conf_.simd_w = cpu_isa_traits<isa>::vlen / sizeof(float);
 
     const bool has_spatial = utils::one_of(ndims(), 3, 4, 5);
     const dim_t HW = H() * W();

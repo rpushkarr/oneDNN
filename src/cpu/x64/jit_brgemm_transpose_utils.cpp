@@ -15,7 +15,6 @@
 *******************************************************************************/
 
 #include "common/c_types_map.hpp"
-#include "common/math_utils.hpp"
 #include "common/nstl.hpp"
 #include "common/type_helpers.hpp"
 #include "common/utils.hpp"
@@ -87,7 +86,7 @@ private:
         jit_generator::kmovw(k, regw_tmp);
     };
     void transpose_16x16(int nrows, int ncolumns);
-    void transpose_16x16_avx2(int nrows, int ncolumns);
+    void transpose_8x8(int nrows, int ncolumns);
     void transpose_ker(int nrows, int ncolumns);
     void transpose(int nrows, int ncolumns);
     void init_masks(int tail_length);
@@ -233,7 +232,7 @@ void jit_brgemm_trans_m_k_f32_t::transpose_16x16(int nrows, int ncolumns) {
     fixup16x16();
 }
 
-void jit_brgemm_trans_m_k_f32_t::transpose_16x16_avx2(int nrows, int ncolumns) {
+void jit_brgemm_trans_m_k_f32_t::transpose_8x8(int nrows, int ncolumns) {
     assert(transpose_size == 8 && "Unsupported transpose size");
     auto xmm_tmp = xmm13;
 
@@ -320,7 +319,7 @@ void jit_brgemm_trans_m_k_f32_t::transpose_ker(int nrows, int ncolumns) {
     if (is_superset(conf_->isa, avx512_core)) {
         transpose_16x16(nrows, ncolumns);
     } else {
-        transpose_16x16_avx2(nrows, ncolumns);
+        transpose_8x8(nrows, ncolumns);
     }
 }
 
@@ -363,7 +362,7 @@ void jit_brgemm_trans_m_k_f32_t::init_masks(int tail_length) {
         kmovw(k0F0F, 0x0f0f); // 0000111100001111
         kmovw(kF0F0, 0xf0f0); // 1111000011110000
     } else if (tail_length) {
-        lea(reg_tmp, ptr[rip + mask_label_]);
+        mov(reg_tmp, mask_label_);
         vmovups(ymm_tail_mask, ptr[reg_tmp]);
         vmovups(xmm_upper_tail_mask, ptr[reg_tmp + vreg_traits<Xmm>::vlen]);
     }
@@ -1729,10 +1728,12 @@ void jit_copy_f32_t::init_masks(int tail_length) {
         jit_generator::kmovd(k, regw_tmp);
     };
 
-    if (isa_has_masks(conf_->isa))
+    if (isa_has_masks(conf_->isa)) {
         kmovd(mask_tail, (1 << tail_length) - 1);
-    else
-        vmovups(ymm_tail_mask, ptr[rip + mask_label_]);
+    } else {
+        mov(reg_tmp, mask_label_);
+        vmovups(ymm_tail_mask, ptr[reg_tmp]);
+    }
 }
 
 void jit_copy_f32_t::generate() {
@@ -2072,10 +2073,11 @@ void jit_brgemm_relo_copy_to_wbuffer_t::generate() {
     // load permute indices from data section
     Label full_ocb_label, finish_label, permute_index_table;
     if (!is_f32) {
+        mov(reg_tmp, permute_index_table);
         if (is_xf16)
-            vmovdqu16(zmm_idx, ptr[rip + permute_index_table]);
+            vmovdqu16(zmm_idx, ptr[reg_tmp]);
         else
-            vmovdqu8(zmm_idx, ptr[rip + permute_index_table]);
+            vmovdqu8(zmm_idx, ptr[reg_tmp]);
     }
 
     mov(reg_src, ptr[param1 + GET_OFF(src)]);
@@ -2294,11 +2296,50 @@ void jit_brgemm_trans_wei_f32_t::transpose_16x16(int nrows, int ncolumns) {
 
 void jit_brgemm_trans_wei_f32_t::transpose_8x8() {
     mov(reg_tr_src_tmp, reg_tr_src);
-    Xbyak::Ymm ymm_dummy = Ymm(0);
-    Xbyak::Xmm xmm_dummy = Xmm(0);
-    jit_generator::transpose(reg_src, reg_tr_src_tmp, src_stride, tr_src_stride,
-            8, 8, data_type::f32,
-            /*unused*/ ymm_dummy, ymm_dummy, xmm_dummy);
+
+    // Intel(R) Software Optimization manual
+    // Example 15-20. 8x8 Matrix Transpose Using VINSERTPS
+    vmovups(xmm0, ptr[reg_src]);
+    vinsertf128(ymm0, ymm0, ptr[reg_src + 4 * src_stride], 1);
+    vmovups(xmm1, ptr[reg_src + 1 * src_stride]);
+    vinsertf128(ymm1, ymm1, ptr[reg_src + 5 * src_stride], 1);
+
+    vunpcklpd(ymm8, ymm0, ymm1);
+    vunpckhpd(ymm9, ymm0, ymm1);
+    vmovups(xmm2, ptr[reg_src + 2 * src_stride]);
+    vinsertf128(ymm2, ymm2, ptr[reg_src + 6 * src_stride], 1);
+    vmovups(xmm3, ptr[reg_src + 3 * src_stride]);
+    vinsertf128(ymm3, ymm3, ptr[reg_src + 7 * src_stride], 1);
+    vunpcklpd(ymm10, ymm2, ymm3);
+    vunpckhpd(ymm11, ymm2, ymm3);
+    vshufps(ymm4, ymm8, ymm10, 0x88);
+    vmovups(ptr[reg_tr_src_tmp], ymm4);
+    vshufps(ymm5, ymm8, ymm10, 0xDD);
+    vmovups(ptr[reg_tr_src_tmp + tr_src_stride], ymm5);
+    vshufps(ymm6, ymm9, ymm11, 0x88);
+    vmovups(ptr[reg_tr_src_tmp + 2 * tr_src_stride], ymm6);
+    vshufps(ymm7, ymm9, ymm11, 0xDD);
+    vmovups(ptr[reg_tr_src_tmp + 3 * tr_src_stride], ymm7);
+    vmovups(xmm0, ptr[reg_src + 16]);
+    vinsertf128(ymm0, ymm0, ptr[reg_src + 4 * src_stride + 16], 1);
+    vmovups(xmm1, ptr[reg_src + src_stride + 16]);
+    vinsertf128(ymm1, ymm1, ptr[reg_src + 5 * src_stride + 16], 1);
+    vunpcklpd(ymm8, ymm0, ymm1);
+    vunpckhpd(ymm9, ymm0, ymm1);
+    vmovups(xmm2, ptr[reg_src + 2 * src_stride + 16]);
+    vinsertf128(ymm2, ymm2, ptr[reg_src + 6 * src_stride + 16], 1);
+    vmovups(xmm3, ptr[reg_src + 3 * src_stride + 16]);
+    vinsertf128(ymm3, ymm3, ptr[reg_src + 7 * src_stride + 16], 1);
+    vunpcklpd(ymm10, ymm2, ymm3);
+    vunpckhpd(ymm11, ymm2, ymm3);
+    vshufps(ymm4, ymm8, ymm10, 0x88);
+    vmovups(ptr[reg_tr_src_tmp + 4 * tr_src_stride], ymm4);
+    vshufps(ymm5, ymm8, ymm10, 0xDD);
+    vmovups(ptr[reg_tr_src_tmp + 5 * tr_src_stride], ymm5);
+    vshufps(ymm6, ymm9, ymm11, 0x88);
+    vmovups(ptr[reg_tr_src_tmp + 6 * tr_src_stride], ymm6);
+    vshufps(ymm7, ymm9, ymm11, 0xDD);
+    vmovups(ptr[reg_tr_src_tmp + 7 * tr_src_stride], ymm7);
 }
 
 void jit_brgemm_trans_wei_f32_t::init_masks() {
@@ -2922,6 +2963,7 @@ void jit_amx_ip_trans_diff_wei_to_vnni_t::generate() {
 
     const reg64_t &reg_output = r15;
     const reg64_t &reg_input = r14;
+    const reg64_t &reg_prm_table = r13;
     const reg64_t &reg_last_ic_block = r12;
     const reg64_t &reg_last_oc_block = r11;
     const reg32_t &regw_tmp = r10d;
@@ -3096,7 +3138,8 @@ void jit_amx_ip_trans_diff_wei_to_vnni_t::generate() {
     mov(reg_last_ic_block, ptr[abi_param1 + GET_OFF(last_ic_block)]);
     mov(reg_last_oc_block, ptr[abi_param1 + GET_OFF(last_oc_block)]);
 
-    vmovups(zmm_idx, ptr[rip + prm_table]);
+    mov(reg_prm_table, prm_table);
+    vmovups(zmm_idx, ptr[reg_prm_table]);
 
     cmp(reg_last_oc_block, 0);
     je(skip_oc_tail, T_NEAR);

@@ -44,17 +44,14 @@ dimension, the following constraint must hold true:
 When executed, the inputs and outputs should be mapped to an execution
 argument index as specified by the following table.
 
-| Primitive input/output           | Execution argument index                                                   |
-|----------------------------------|----------------------------------------------------------------------------|
-| \src                             | DNNL_ARG_SRC                                                               |
-| \weights                         | DNNL_ARG_WEIGHTS                                                           |
-| \bias                            | DNNL_ARG_BIAS                                                              |
-| \dst                             | DNNL_ARG_DST                                                               |
-| \f$\text{dropout output mask}\f$ | DNNL_ARG_ATTR_DROPOUT_MASK                                                 |
-| \f$\text{dropout probability}\f$ | DNNL_ARG_ATTR_DROPOUT_PROBABILITY                                          |
-| \f$\text{dropout rng seed}\f$    | DNNL_ARG_ATTR_DROPOUT_SEED                                                 |
-| \f$\text{binary post-op}\f$      | DNNL_ARG_ATTR_MULTIPLE_POST_OP(binary_post_op_position) \| DNNL_ARG_SRC_1  |
-| \f$\text{prelu post-op}\f$       | DNNL_ARG_ATTR_MULTIPLE_POST_OP(prelu_post_op_position) \| DNNL_ARG_WEIGHTS |
+| Primitive input/output      | Execution argument index                                                   |
+|-----------------------------|----------------------------------------------------------------------------|
+| \src                        | DNNL_ARG_SRC                                                               |
+| \weights                    | DNNL_ARG_WEIGHTS                                                           |
+| \bias                       | DNNL_ARG_BIAS                                                              |
+| \dst                        | DNNL_ARG_DST                                                               |
+| \f$\text{binary post-op}\f$ | DNNL_ARG_ATTR_MULTIPLE_POST_OP(binary_post_op_position) \| DNNL_ARG_SRC_1  |
+| \f$\text{prelu post-op}\f$  | DNNL_ARG_ATTR_MULTIPLE_POST_OP(prelu_post_op_position) \| DNNL_ARG_WEIGHTS |
 
 ## Implementation Details
 
@@ -94,16 +91,14 @@ The MatMul primitive supports the following combinations of data
 types for source, destination, weights, and bias tensors:
 
 
-| Source           | Weights              | Destination                      | Bias                        |
-|:-----------------|:---------------------|:---------------------------------|:----------------------------|
-| f32              | f32                  | f32                              | f32                         |
-| f16              | f16, u8, s8, u4, s4  | f16, u8, s8                      | f16, f32                    |
-| bf16             | bf16, u8, s8, u4, s4 | f32, bf16                        | bf16, f32                   |
-| f32, bf16, f16   | u8, s8               | f32, bf16, f16                   | f32, bf16, f16              |
-| f8_e5m2, f8_e4m3 | f8_e5m2, f8_e4m3     | f32, f16, bf16, f8_e5m2, f8_e4m3 | f32, bf16, f16              |
-| f8_e5m2, f8_e4m3 | f8_e5m2, f8_e4m3     | f32, f16, bf16, f8_e5m2, f8_e4m3 | f32, bf16, f16              |
-| u8, s8           | s8                   | u8, s8, s32, f32, f16, bf16      | u8, s8, s32, f32, f16, bf16 |
-
+| Source         | Weights   | Destination                 | Bias                        |
+|:---------------|:----------|:----------------------------|:----------------------------|
+| f32            | f32       | f32                         | f32                         |
+| f16            | f16       | f16, u8, s8                 | f16, f32                    |
+| bf16           | bf16      | f32, bf16                   | bf16, f32                   |
+| f32, bf16, f16 | u8, s8    | f32, bf16, f16              | f32, bf16, f16              |
+| u8, s8         | s8        | u8, s8, s32, f32, f16, bf16 | u8, s8, s32, f32, f16, bf16 |
+| f8_e5m2        | f8_e5m2   | f32, f16, bf16, f8_e5m2     | f32, bf16, f16              |
 
 
 ### Data Representation
@@ -143,7 +138,6 @@ The following attributes and post-ops are supported:
 |:----------|:---------------------------------------------------------------|:------------------------------------------------------------------------------|:------------------------------------|
 | Attribute | [Scales](@ref dnnl::primitive_attr::set_scales_mask)           | Scales the result by given scale factor(s)                                    |                                     |
 | Attribute | [Zero-points](@ref dnnl::primitive_attr::set_zero_points_mask) | Sets zero point(s) for the corresponding tensors                              | Int8 computations only              |
-| Attribute | [Dropout](@ref dnnl::primitive_attr::set_dropout)              | Applies pseudo-random dropout to destination buffer, also fills mask buffer   |                                     |
 | Post-op   | [Eltwise](@ref dnnl::post_ops::append_eltwise)                 | Applies an @ref dnnl_api_eltwise operation to the result                      |                                     |
 | Post-op   | [Sum](@ref dnnl::post_ops::append_sum)                         | Adds the operation result to the destination tensor instead of overwriting it |                                     |
 | Post-op   | [Binary](@ref dnnl::post_ops::append_binary)                   | Applies a @ref dnnl_api_binary operation to the result                        | General binary post-op restrictions |
@@ -161,12 +155,6 @@ DNNL_ARG_${MEMORY_INDEX}` or `DNNL_ARG_ATTR_ZERO_POINTS |
 DNNL_ARG_${MEMORY_INDEX}` during the execution stage. For instance, a
 source tensor zero points memory argument would be passed with index
 (`DNNL_ARG_ATTR_ZERO_POINTS | DNNL_ARG_SRC`).
-
-When Dropout is specified, at the execution stage the user must provide 2 input
-memory objects with `DNNL_ARG_ATTR_DROPOUT_PROBABILITY` (1x1x...x1 f32 value
-from 0.f to 1.f) and `DNNL_ARG_DROPOUT_SEED` (1x1x...x1 s32 value from INT_MIN
-to INT_MAX), and 1 output memory object with `DNNL_ARG_ATTR_DROPOUT_MASK` (u8
-memory buffer that shares its shape with the destination buffer).
 
 @note Please check tutorials below to see run-time attributes in use.
 
@@ -187,7 +175,6 @@ memory buffer that shares its shape with the destination buffer).
      * Destination zero point.
      * Runtime dimensions.
      * Three and higher dimensional matrices.
-   - The layout of dropout mask has to be exactly the same as that of dst.
 
 3. **CPU**
    - Configuration with int8 source data type, s8 weight data type and f16
@@ -196,7 +183,6 @@ memory buffer that shares its shape with the destination buffer).
      type and floating point destination data type is not optimized.
    - Only reference support for fp8 data types (f8_e5m2, f8_e4m3) is
      is available on CPU.
-   - The layout of dropout mask has to be exactly the same as that of dst.
  
 ## Performance Tips
 

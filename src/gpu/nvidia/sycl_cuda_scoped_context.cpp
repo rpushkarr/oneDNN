@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020 Codeplay Software Limited
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,22 +23,26 @@ namespace gpu {
 namespace nvidia {
 
 cuda_sycl_scoped_context_handler_t::cuda_sycl_scoped_context_handler_t(
-        const nvidia::engine_t &engine)
+        const sycl_cuda_engine_t &engine)
     : need_to_recover_(false) {
-    CUDA_EXECUTE_FUNC(cuCtxGetCurrent, &original_);
-    auto desired = engine.get_underlying_context();
-    currentDevice_ = engine.get_underlying_device();
+    try {
+        CUDA_EXECUTE_FUNC(cuCtxGetCurrent, &original_);
+        auto desired = engine.get_underlying_context();
+        currentDevice_ = engine.get_underlying_device();
 
-    if (original_ != desired) {
-        // Sets the desired context as the active one for the thread
-        CUDA_EXECUTE_FUNC(cuCtxSetCurrent, desired);
-        // No context is installed and the suggested context is primary
-        // This is the most common case. We can activate the context in the
-        // thread and leave it there until all the PI context referring to
-        // the same underlying CUDA primary context are destroyed. This
-        // emulates the behaviour of the CUDA runtime api, and avoids costly
-        // context switches. No action is required on this side of the if.
-        need_to_recover_ = original_ != nullptr;
+        if (original_ != desired) {
+            // Sets the desired context as the active one for the thread
+            CUDA_EXECUTE_FUNC(cuCtxSetCurrent, desired);
+            // No context is installed and the suggested context is primary
+            // This is the most common case. We can activate the context in the
+            // thread and leave it there until all the PI context referring to
+            // the same underlying CUDA primary context are destroyed. This
+            // emulates the behaviour of the CUDA runtime api, and avoids costly
+            // context switches. No action is required on this side of the if.
+            need_to_recover_ = original_ != nullptr;
+        }
+    } catch (const std::runtime_error &e) {
+        error::wrap_c_api(status::runtime_error, e.what());
     }
 }
 
@@ -46,8 +50,12 @@ cuda_sycl_scoped_context_handler_t::
         ~cuda_sycl_scoped_context_handler_t() noexcept(false) {
     // we need to release the placed_context_ since we set it from
     // ctx.get() retains the underlying context so we need to remove it
-    CUDA_EXECUTE_FUNC(cuDevicePrimaryCtxRelease, currentDevice_);
-    if (need_to_recover_) { CUDA_EXECUTE_FUNC(cuCtxSetCurrent, original_); }
+    try {
+        CUDA_EXECUTE_FUNC(cuDevicePrimaryCtxRelease, currentDevice_);
+        if (need_to_recover_) { CUDA_EXECUTE_FUNC(cuCtxSetCurrent, original_); }
+    } catch (const std::runtime_error &e) {
+        error::wrap_c_api(status::runtime_error, e.what());
+    }
 }
 
 } // namespace nvidia

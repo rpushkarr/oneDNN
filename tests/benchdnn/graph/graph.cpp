@@ -21,7 +21,6 @@
 #include <vector>
 #include <unordered_map>
 
-#include "allocator.hpp"
 #include "dnnl_common.hpp"
 #include "graph.hpp"
 #include "ref_partition.hpp"
@@ -341,9 +340,7 @@ using namespace dnnl::graph;
 
 std::string case_to_str(const std::string &json_file,
         const std::map<size_t, std::string> &in_shapes,
-        const std::map<size_t, std::string> &op_attrs,
-        const std::string &fpmath_mode, const size_t expected_n_partitions,
-        const int64_t mb) {
+        const std::map<size_t, std::string> &op_attrs, const int64_t mb) {
     std::stringstream s;
     dump_global_params(s);
 
@@ -372,66 +369,8 @@ std::string case_to_str(const std::string &json_file,
         s << " ";
     }
 
-    if (strcmp(fpmath_mode.c_str(), "default") != 0) {
-        s << "--attr-fpmath=" << fpmath_mode << " ";
-    }
-
-    if (expected_n_partitions != 0) {
-        s << "--expected-n-partitions=" << std::to_string(expected_n_partitions)
-          << " ";
-    }
-
     s << "--case=" << json_file;
     return s.str();
-}
-
-void skip_unimplemented_ops(const dnnl::graph::partition &partition,
-        const deserialized_graph &dg, res_t *res) {
-    // Unconditionally skip all unimplemented cases for Graph Compiler. They got
-    // triggered when `_DNNL_DISABLE_DNNL_BACKEND=1` is utilized.
-    // TODO: extend with `getenv` call if limits too much.
-    if (is_gc_backend()) {
-        res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
-        return;
-    }
-
-    // A list of ops that don't have DNNL backend support so far.
-    static const std::vector<std::string> unimplemented_ops {"Pow"};
-
-    // For an unsupported partition, retrieve all operation IDs, find a
-    // correspondent operation kind in a deserialized_graph and match it against
-    // a list of known unsupported ops.
-    const std::vector<size_t> &partition_op_ids = partition.get_ops();
-    for (const size_t op_id : partition_op_ids) {
-        const std::string &dg_op_kind = dg.get_op(op_id).kind_;
-        const bool has_unimplemented_op = std::any_of(unimplemented_ops.begin(),
-                unimplemented_ops.end(),
-                [&dg_op_kind](const std::string &kind) {
-                    return dg_op_kind == kind;
-                });
-        if (has_unimplemented_op) {
-            BENCHDNN_PRINT(
-                    2, "[INFO]: Unimplemented op: %s.\n", dg_op_kind.c_str());
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
-            return;
-        }
-    }
-}
-
-void skip_unimplemented_graph_attribute(
-        const dnnl::fpmath_mode &fpmath_mode, res_t *res) {
-    // Compiler backend only supports strict and bf16 for floating-point math
-    // mode
-    if (is_gc_backend()) {
-        if (fpmath_mode != dnnl::fpmath_mode::strict
-                && fpmath_mode != dnnl::fpmath_mode::bf16) {
-            res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
-            return;
-        }
-    }
 }
 
 /// @brief check if the current partition is actually an End op
@@ -455,9 +394,6 @@ int doit(const prb_t *prb, res_t *res) {
     skip_start(res);
     if (res->state == SKIPPED) return OK;
 
-    skip_unimplemented_graph_attribute(prb->fpmath_mode, res);
-    if (res->state == SKIPPED) return OK;
-
     const auto &dg = prb->dg;
     const auto graph_in_ports = dg.get_input_ports();
     auto ograph = dg.to_graph(prb->fpmath_mode);
@@ -469,37 +405,27 @@ int doit(const prb_t *prb, res_t *res) {
         if (aop.kind_ == "End") { end_opid_v.emplace_back(aop.id_); }
     }
 
-    if (prb->expected_n_partition != 0) {
-        // If the expected partition num is specified by user with command line
-        // knob
-        if (partitions.size() != prb->expected_n_partition) {
-            BENCHDNN_PRINT(0,
-                    "Error: the expected number of partitions (%zu) doesn't "
-                    "coincide with the actual number of partitions returned "
-                    "(%zu).\n ",
-                    prb->expected_n_partition, partitions.size());
-            return res->state = FAILED, FAIL;
+    if (partitions.empty()) {
+        BENCHDNN_PRINT(0, "FAIL: partition empty %d.\n", 0);
+        return res->state = FAILED, FAIL;
+    }
+    BENCHDNN_PRINT(1, "Partition size %zd.\n", partitions.size());
+
+    for (size_t i = 0; i < partitions.size(); ++i) {
+        if (!partitions[i].is_supported()) {
+            BENCHDNN_PRINT(1, "Partition %zd is unsupported!\n", i);
+            // Single end op partition is an unsupported partition in the library
+            if (is_single_end_op_partition(partitions[i], end_opid_v)) {
+                continue;
+            }
+            res->state = SKIPPED;
+            res->reason = CASE_NOT_SUPPORTED;
+            return OK;
         }
     }
 
-    if (partitions.empty()) {
-        BENCHDNN_PRINT(0, "%s\n", "Error: partitions are empty");
-        return res->state = FAILED, FAIL;
-    }
-
-    BENCHDNN_PRINT(3, "[INFO]: n_partitions:%zd; ops_in_partitions:%s\n",
-            partitions.size(), verbose_partitions_n_ops(partitions).c_str());
-
     for (size_t i = 0; i < partitions.size(); ++i) {
-        if (partitions[i].is_supported()) continue;
-
-        // End operation is not supported in the library, and it's fine to
-        // continue validation as it's a knob without functional meaning.
-        if (is_single_end_op_partition(partitions[i], end_opid_v)) continue;
-
-        skip_unimplemented_ops(partitions[i], dg, res);
-        if (res->state == SKIPPED) return OK;
-
+        if (is_single_end_op_partition(partitions[i], end_opid_v)) { continue; }
         auto in_out_lts = partitions[i].get_input_ports();
         const auto &outputs = partitions[i].get_output_ports();
         in_out_lts.insert(in_out_lts.end(), outputs.begin(), outputs.end());
@@ -539,11 +465,6 @@ int doit(const prb_t *prb, res_t *res) {
             }
         }
         skip_unimplemented_data_type(in_out_dt, dir, res);
-        if (res->state == SKIPPED) return OK;
-
-        BENCHDNN_PRINT(3, "[INFO]: partition #%zd is unsupported!\n", i);
-        res->state = UNIMPLEMENTED;
-        return FAIL;
     }
 
     if (res->state == SKIPPED || res->state == UNIMPLEMENTED) return OK;
@@ -573,8 +494,13 @@ int doit(const prb_t *prb, res_t *res) {
         set_any_layout(dg, partitions, id_to_set_any_layout);
     }
 
+    // the index offset for current partition compared with the previous partition index
+    size_t idx_offset = 0;
     for (size_t i = 0; i < partitions.size(); ++i) {
-        if (is_single_end_op_partition(partitions[i], end_opid_v)) { continue; }
+        if (is_single_end_op_partition(partitions[i], end_opid_v)) {
+            idx_offset += 1;
+            continue;
+        }
 
         auto inputs = partitions[i].get_input_ports();
         auto outputs = partitions[i].get_output_ports();
@@ -593,14 +519,12 @@ int doit(const prb_t *prb, res_t *res) {
                                partitions[i].compile(inputs, outputs, eng)),
                 WARN, res);
 
-        record_queried_logical_tensors(
-                outputs, c_partitions.back(), id_to_queried_logical_tensors);
+        record_queried_logical_tensors(outputs, c_partitions[i - idx_offset],
+                id_to_queried_logical_tensors);
     }
     if (bench_mode == bench_mode_t::init) return res->state = INITIALIZED, OK;
 
-    // `idx_offset` points to the correspondent `compiled_partition`, if any
-    // of `partitions` were skipped expectedly and not compiled.
-    size_t idx_offset = 0;
+    idx_offset = 0;
     for (size_t i = 0; i < partitions.size(); ++i) {
         if (is_single_end_op_partition(partitions[i], end_opid_v)) {
             idx_offset += 1;
@@ -618,10 +542,8 @@ int doit(const prb_t *prb, res_t *res) {
 
         ref_partition_t ref_partition(dg, partitions[i], inputs, outputs);
         // Construct memory for both perf & corr modes
-        SAFE(ref_partition.init_ref(
-                     graph_in_ports, partition_mem_map_v[i], res),
-                WARN);
-        if (res->state == SKIPPED) return OK;
+        ref_partition.init_ref(
+                bench_mode, graph_in_ports, partition_mem_map_v[i], res);
 
         if (has_bench_mode_bit(mode_bit_t::corr)) {
             // correctness mode, run ref partition
@@ -668,29 +590,18 @@ int doit(const prb_t *prb, res_t *res) {
                     i);
             return res->state = FAILED, FAIL;
         }
+
         if (res->state == SKIPPED || res->state == UNIMPLEMENTED) return OK;
 
         input_ts_all.emplace_back(input_ts);
         output_ts_all.emplace_back(output_ts);
 
-        auto &graph_mem_mgr = graph_mem_manager_t::get_instance();
-        graph_mem_mgr.start_graph_mem_check();
-        BENCHDNN_PRINT(3, "[INFO]: Start execution of partition #%zd.\n", i);
-        // Need following clean-up steps as the memories have been mappped to
-        // device. Otherwise the deconstruction will fail.
-        DNN_GRAPH_SAFE(
-                c_partitions[i - idx_offset].execute(strm, input_ts, output_ts),
-                (WARN | NEED_CLEANUP), res);
-        DNN_GRAPH_SAFE(strm.wait(), WARN, res);
-        graph_mem_mgr.stop_graph_mem_check();
+        c_partitions[i - idx_offset].execute(strm, input_ts, output_ts);
+        strm.wait();
 
         // map memory from device back to host
         map_unmap_partition_mem(partition_mem_map_v[i], inputs, MAP, res);
         map_unmap_partition_mem(partition_mem_map_v[i], outputs, MAP, res);
-
-        // If the device is out-of-memory due to graph path execution, skip the
-        // case.
-        if (res->state == SKIPPED) return OK;
         if (res->state == FAIL) {
             BENCHDNN_PRINT(0,
                     "FAIL: Fail to map memories back to host for partition "
@@ -698,22 +609,13 @@ int doit(const prb_t *prb, res_t *res) {
                     i);
             return FAIL;
         }
+
         res->state = EXECUTED;
 
         if (has_bench_mode_bit(mode_bit_t::corr)) {
             // args for correctness check of the last op
-            SAFE(ref_partition.check_partition_correctness(
-                         partition_mem_map_v[i], res),
-                    WARN);
-        }
-
-        auto &graph_mem_req = graph_memory_req_args_t::get_instance();
-        // release the memory assigned for the reference path of the partition,
-        // while the memory for the graph path needs to be kept for the
-        // performance mode if needed.
-        graph_mem_req.reset_path(REF);
-        if (!has_bench_mode_bit(mode_bit_t::perf)) {
-            graph_mem_req.reset_path(GRAPH_USER);
+            ref_partition.check_partition_correctness(
+                    partition_mem_map_v[i], res);
         }
     }
 
@@ -722,7 +624,6 @@ int doit(const prb_t *prb, res_t *res) {
                      input_ts_all, output_ts_all, res),
                 WARN);
     }
-
     return OK;
 }
 } // namespace graph

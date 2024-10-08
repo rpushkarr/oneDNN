@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2024 Intel Corporation
+* Copyright 2016-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -44,14 +44,6 @@ template <primitive_kind_t>
 struct pkind_traits {}; /* ::desc_type, ::query_d */
 
 template <>
-struct prec_traits<data_type::f4_e2m1> {
-    typedef float4_e2m1_t type;
-};
-template <>
-struct prec_traits<data_type::e8m0> {
-    typedef float8_e8m0_t type;
-};
-template <>
 struct prec_traits<data_type::f8_e5m2> {
     typedef float8_e5m2_t type;
 };
@@ -88,26 +80,10 @@ struct prec_traits<data_type::u8> {
     typedef uint8_t type;
 };
 template <>
-struct prec_traits<data_type::s4> {
-    typedef int4_t type;
-};
-template <>
-struct prec_traits<data_type::u4> {
-    typedef uint4_t type;
-};
-template <>
 struct prec_traits<data_type::boolean> {
     typedef bool type;
 };
 
-template <>
-struct data_traits<float4_e2m1_t> {
-    static constexpr data_type_t data_type = data_type::f4_e2m1;
-};
-template <>
-struct data_traits<float8_e8m0_t> {
-    static constexpr data_type_t data_type = data_type::e8m0;
-};
 template <>
 struct data_traits<float8_e5m2_t> {
     static constexpr data_type_t data_type = data_type::f8_e5m2;
@@ -139,14 +115,6 @@ struct data_traits<int8_t> {
 template <>
 struct data_traits<uint8_t> {
     static constexpr data_type_t data_type = data_type::u8;
-};
-template <>
-struct data_traits<int4_t> {
-    static constexpr data_type_t data_type = data_type::s4;
-};
-template <>
-struct data_traits<uint4_t> {
-    static constexpr data_type_t data_type = data_type::u4;
 };
 template <>
 struct data_traits<bool> {
@@ -190,8 +158,6 @@ PKIND_TRAITS_INST(binary);
 PKIND_TRAITS_INST(matmul);
 PKIND_TRAITS_INST(resampling);
 PKIND_TRAITS_INST(reduction);
-PKIND_TRAITS_INST(sum);
-PKIND_TRAITS_INST(sdpa);
 #undef PKIND_TRAITS_INST
 
 } // namespace impl

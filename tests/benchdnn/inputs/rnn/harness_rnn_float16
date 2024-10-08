@@ -1,6 +1,7 @@
 # f16
 --reset
 
+--skip-impl=ref
 --trivial-strides=true,false
 --alg=VANILLA_RNN
 --cfg=f16f32,f16

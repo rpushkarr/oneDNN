@@ -97,7 +97,7 @@ struct brgemm_matmul_t : public primitive_t {
         using ::dnnl::impl::cpu::matmul::cpu_matmul_pd_t::cpu_matmul_pd_t;
 
         DECLARE_COMMON_PD_T(
-                JIT_IMPL_NAME_HELPER("brg_matmul:", isa, ""), brgemm_matmul_t);
+                JIT_IMPL_NAME_HELPER("brg:", isa, ""), brgemm_matmul_t);
 
         status_t init(engine_t *engine);
         int get_brg_kernel_idx(bool is_bs_tail, bool do_initialization,
@@ -106,15 +106,13 @@ struct brgemm_matmul_t : public primitive_t {
             return get_brg_kernel_index(bgmmc_, is_bs_tail, do_initialization,
                     m_ker_idx, n_ker_idx, is_K_tail, bs);
         }
-        const brgemm_desc_t &get_brg_desc(int idx) const {
-            return brg_descs_[idx];
-        }
+        const brgemm_t &get_brg_desc(int idx) const { return brg_descs_[idx]; }
         const brgemm_matmul_conf_t &get_brgemm_matmul_conf() const {
             return bgmmc_;
         }
 
     private:
-        brgemm_desc_t brg_descs_[max_num_brg_kernels_matmul];
+        brgemm_t brg_descs_[max_num_brg_kernels_matmul];
         brgemm_matmul_conf_t bgmmc_;
     };
 
@@ -132,16 +130,13 @@ private:
 
     const pd_t *pd() const { return (const pd_t *)primitive_t::pd().get(); }
     status_t execute_body(const exec_ctx_t &ctx) const;
-    void compute_kernel(const brg_matmul_exec_ctx_t &brgmm_ctx,
-            const char *A_data_batch_ptr, const char *B_data_batch_ptr,
-            int ithr, int b_idx, int m_blk_idx, int n_blk_idx, int k_blk_idx,
+    void compute_kernel(const brg_matmul_exec_ctx_t &brgmm_ctx, int ithr,
+            int b_idx, int m_blk_idx, int n_blk_idx, int k_blk_idx,
             bool do_init, int &prev_ker_idx) const;
     void copy_a_chunk_in_buffer(const brg_matmul_exec_ctx_t &brgmm_ctx,
-            const char *A_data_batch_ptr, int ithr, int m_blk_idx,
-            int k_blk_idx) const;
+            int ithr, int b_idx, int m_blk_idx, int k_blk_idx) const;
     void copy_b_chunk_in_buffer(const brg_matmul_exec_ctx_t &brgmm_ctx,
-            const char *B_data_batch_ptr, int ithr, int b_idx, int n_blk_idx,
-            int k_blk_idx) const;
+            int ithr, int b_idx, int n_blk_idx, int k_blk_idx) const;
     void maybe_reduce_partial_results_and_apply_postops(
             const brg_matmul_exec_ctx_t &brgmm_ctx) const;
     void accumulate(

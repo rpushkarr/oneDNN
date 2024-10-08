@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2024 Intel Corporation
+* Copyright 2016-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -37,8 +37,6 @@ protected:
 };
 
 TEST_F(iface_sum_test_t, SumTestDstDataTypeCompliance) {
-    SKIP_IF_HIP(true, "Sum operator is not supported by HIP");
-
     using dt = memory::data_type;
 
     const dt src_dt = dt::s8;
@@ -143,7 +141,6 @@ protected:
                 dnnl_aBcde4b);
     }
     void SetUp() override {
-        SKIP_IF_HIP(true, "Sum operator is not supported by HIP");
         src_data_type = data_traits<src_data_t>::data_type;
         dst_data_type = data_traits<dst_data_t>::data_type;
         sum_test_params p

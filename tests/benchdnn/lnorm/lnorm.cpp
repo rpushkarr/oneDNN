@@ -371,10 +371,9 @@ int prepare_bwd(const prb_t *prb, dnn_mem_map_t &mem_map,
 dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
     const prb_t *prb = init_pd_args.prb;
     res_t *res = init_pd_args.res;
-    bool force_f32_dt = init_pd_args.force_f32_dt;
 
-    auto src_d = dnn_mem_t::init_md(prb->ndims, prb->dims.data(),
-            force_f32_dt ? dnnl_f32 : prb->dt[0], prb->tag[0]);
+    auto src_d = dnn_mem_t::init_md(
+            prb->ndims, prb->dims.data(), prb->dt[0], prb->tag[0]);
 
     benchdnn_dnnl_wrapper_t<dnnl_memory_desc_t> stat_d {};
     if (prb->stat_tag != tag::undef) {
@@ -382,16 +381,13 @@ dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
                 prb->ndims - 1, prb->dims.data(), dnnl_f32, prb->stat_tag);
     }
 
-    attr_args_t attr_args;
-    attr_args.prepare_post_ops_mds(
-            prb->attr, prb->ndims, prb->dims.data(), dnnl_layer_normalization);
     auto dnnl_attr = make_benchdnn_dnnl_wrapper(
-            create_dnnl_attr(prb->attr, attr_args));
+            create_dnnl_attr(prb->attr, attr_args_t()));
 
     auto flags = (dnnl_normalization_flags_t)prb->flags;
     if (prb->dir & FLAG_FWD) {
-        auto dst_d = dnn_mem_t::init_md(prb->ndims, prb->dims.data(),
-                force_f32_dt ? dnnl_f32 : prb->dt[1], prb->tag[1]);
+        auto dst_d = dnn_mem_t::init_md(
+                prb->ndims, prb->dims.data(), prb->dt[1], prb->tag[1]);
         auto prop = prb->dir & FLAG_INF ? dnnl_forward_inference
                                         : dnnl_forward_training;
         TIME_C_PD(DNN_SAFE_STATUS(
@@ -401,10 +397,10 @@ dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
                         dst_d, stat_d, prb->ss_dt, prb->eps, flags,
                         dnnl_attr)));
     } else {
-        auto diff_src_d = dnn_mem_t::init_md(prb->ndims, prb->dims.data(),
-                force_f32_dt ? dnnl_f32 : prb->dt[0], prb->tag[0]);
-        auto diff_dst_d = dnn_mem_t::init_md(prb->ndims, prb->dims.data(),
-                force_f32_dt ? dnnl_f32 : prb->dt[1], prb->tag[1]);
+        auto diff_src_d = dnn_mem_t::init_md(
+                prb->ndims, prb->dims.data(), prb->dt[0], prb->tag[0]);
+        auto diff_dst_d = dnn_mem_t::init_md(
+                prb->ndims, prb->dims.data(), prb->dt[1], prb->tag[1]);
         auto prop = prb->dir & FLAG_WEI ? dnnl_backward : dnnl_backward_data;
         TIME_C_PD(DNN_SAFE_STATUS(
                 dnnl_layer_normalization_backward_primitive_desc_create_v2(
@@ -417,17 +413,21 @@ dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
 }
 
 void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
-    skip_unimplemented_data_type(
-            {prb->dt[0], prb->dt[1], prb->ss_dt}, prb->dir, res);
+    skip_unimplemented_data_type({prb->dt[0], prb->dt[1]}, prb->dir, res);
     skip_unimplemented_sum_po(
             prb->attr, res, dnnl_layer_normalization, prb->dt[0]);
     skip_unimplemented_prelu_po(prb->attr, res, dnnl_layer_normalization);
 
-    if (is_gpu() && prb->attr.post_ops.len() != 0) {
-        // GPU does not support post-ops
-        res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
-        return;
+    if (is_gpu()) {
+        const bool dt_ok = prb->dt[0] == prb->dt[1];
+        if (!dt_ok) {
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
+            return;
+        }
+        if (!is_nvidia_gpu(get_test_engine()) && prb->ss_dt != dnnl_f32) {
+            res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
+            return;
+        }
     }
 }
 
@@ -475,7 +475,7 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
 
                 const auto &sh = ref_args.find(DNNL_ARG_SHIFT);
                 const auto &dst = ref_args.find(DNNL_ARG_DST);
-                const int64_t c = dst.get_idx(
+                const int64_t c = dst.get_scale_idx(
                         args.idx, 1 << (prb->ndims - 1) /* last_dim_mask */);
                 const float beta = sh.get_elem(c);
                 // Using an empirically derived threshold, check if
@@ -518,36 +518,16 @@ std::vector<int> supported_exec_args(dir_t dir) {
     return (dir & FLAG_FWD) ? exec_fwd_args : exec_bwd_args;
 };
 
-fill_cfg_t binary_po_fill_cfg(
-        int exec_arg, const dnn_mem_t &mem, const attr_t &attr) {
-    fill_cfg_t cfg;
-    const int post_ops_range = DNNL_ARG_ATTR_MULTIPLE_POST_OP(31)
-            - DNNL_ARG_ATTR_MULTIPLE_POST_OP(0);
-    const bool is_post_ops_arg = (exec_arg & post_ops_range);
-    if (is_post_ops_arg) {
-        // LNorm output values are in [-1.f; 1.f] range. Using small values
-        // leads to the cancellation effect. Config secures only positive and
-        // big enough values are used.
-        const int bin_po_idx
-                = exec_arg / DNNL_ARG_ATTR_MULTIPLE_POST_OP_BASE - 1;
-        assert(bin_po_idx < attr.post_ops.len());
-        const auto alg = attr.post_ops.entry[bin_po_idx].kind;
-        cfg = fill_cfg_t(mem.dt(), 4.f, 16.f, /* int = */ true, alg,
-                "lnorm_binary_post_op");
-    }
-    return cfg;
-}
-
 int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
-        dnnl_primitive_t prim, const prb_t *prb, res_t *res,
+        dnnl_primitive_t prim, const prb_t *prb, res_t *res, dir_t dir,
         dnnl_primitive_t prim_ref) {
+    update_inplace_memory_args(mem_map, prb, dir);
     if (has_bench_mode_modifier(mode_modifier_t::no_host_memory)) return OK;
 
     // TODO: this function still allocates the full memory print needed to fill
     // the data and each argument can't be destroyed right away since filling
     // requires all of them at a time.
     const auto &ref_engine = get_cpu_engine();
-    const bool is_fwd_prim = is_fwd_prop_kind(query_prop_kind(query_pd(prim)));
 
     for (auto &entry : mem_map) {
         const int exec_arg = entry.first;
@@ -577,18 +557,14 @@ int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
                 }
                 break;
             default:
-                const auto &binary_fill_cfg
-                        = binary_po_fill_cfg(exec_arg, mem, prb->attr);
-                std::unordered_map<int, fill_cfg_t> fill_cfg_map {
-                        {DNNL_ARG_SRC_1, binary_fill_cfg}};
-                SAFE(init_ref_memory_args_default_case(exec_arg, mem, ref_mem,
-                             prb->attr, res, fill_cfg_map),
+                SAFE(init_ref_memory_args_default_case(
+                             exec_arg, mem, ref_mem, prb->attr, res),
                         WARN);
                 break;
         }
     }
 
-    if (is_fwd_prim) {
+    if (dir & FLAG_FWD) {
         SAFE(prepare_fwd(prb, mem_map, ref_mem_map, res), WARN);
     } else {
         SAFE(prepare_bwd(prb, mem_map, ref_mem_map, res), WARN);
@@ -638,8 +614,9 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     dnn_mem_map_t mem_map, ref_mem_map;
     init_memory_args<prb_t>(mem_map, prb, prim, supported_exec_args(prb->dir));
-    TIME_FILL(SAFE(
-            init_ref_memory_args(ref_mem_map, mem_map, prim, prb, res), WARN));
+    TIME_FILL(SAFE(init_ref_memory_args(
+                           ref_mem_map, mem_map, prim, prb, res, prb->dir),
+            WARN));
 
     args_t args(mem_map), ref_args(ref_mem_map);
 
@@ -647,8 +624,7 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     check_correctness(
             prb, get_kinds_to_check(prb), args, ref_args, setup_cmp, res);
-    SAFE(check_bitwise(prim, get_kinds_to_check(prb), args, prb->attr,
-                 prb->inplace, res),
+    SAFE(check_bitwise(prim, get_kinds_to_check(prb), args, prb->inplace, res),
             WARN);
 
     return measure_perf(prb->ctx_exe, res, prim, args);

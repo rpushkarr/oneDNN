@@ -24,6 +24,18 @@
 #include "flex_rewrite.hpp"
 #include "parser.hpp"
 
+namespace {
+std::string shape_to_string(const dnnl::graph::logical_tensor::dims &shape) {
+    if (shape.empty()) return std::string();
+
+    std::stringstream ss;
+    std::copy(shape.begin(), shape.end(),
+            std::ostream_iterator<int64_t>(ss, "x"));
+    auto res = ss.str();
+    return res.substr(0, res.length() - 1);
+}
+} // namespace
+
 namespace graph {
 
 void flex_rewrite::rewrite(deserialized_graph &dgraph) {
@@ -35,7 +47,6 @@ void flex_rewrite::rewrite(deserialized_graph &dgraph) {
     }
     infer_output_shape(dgraph, change_stride);
     quantized_graph_rewrite(dgraph);
-    graph_attrs_rewrite(dgraph);
 }
 
 void flex_rewrite::split_ncx(const std::string &data_format, dims_t &in,
@@ -112,7 +123,7 @@ void flex_rewrite::broadcast(
         if (l != r) {
             if (l != 1 && r != 1) {
                 fprintf(stderr, "graph: failed to broadcast in infer shape!\n");
-                SAFE_V(FAIL);
+                exit(2);
             }
             z[i] = (l == 1 ? r : l);
         } else {
@@ -155,7 +166,7 @@ void flex_rewrite::cal_pads(dims_t &pads_begin, dims_t &pads_end,
             }
         } else {
             fprintf(stderr, "graph: invalid arguments for `auto_pad`!\n");
-            SAFE_V(FAIL);
+            exit(2);
         }
     }
 }
@@ -481,43 +492,6 @@ void flex_rewrite::infer_output_shape(
                 merge_ncx(data_format, gi[out0], n, c, x);
                 break;
             // infer_norm_output_shape
-            case dnnl::graph::op::kind::GroupNorm:
-                // infer shape for dst.
-                in0 = aop.in_lts_[0].id_;
-                out0 = aop.out_lts_[0].id_;
-                gi[out0] = gi[in0];
-                // attr `keep_stats` is optional, default is `true`
-                if (aop.attrs_.find("keep_stats") == aop.attrs_.end()
-                        || aop.attrs_["keep_stats"].bool_value_) {
-                    // `true` means it has 3 output: dst, mean and var.
-                    //  need to infer shape for mean and var
-                    if (aop.out_lts_.size() == 3) {
-                        int64_t groups = 0;
-                        if (aop.attrs_.find("groups") == aop.attrs_.end()) {
-                            fprintf(stderr,
-                                    "graph: groups is required for "
-                                    "GroupNorm!\n");
-                            SAFE_V(FAIL);
-                        } else {
-                            groups = aop.attrs_["groups"].s64_value_;
-                        }
-                        size_t out1 = aop.out_lts_[1].id_;
-                        size_t out2 = aop.out_lts_[2].id_;
-                        gi[out1].clear();
-                        gi[out2].clear();
-                        // mean/var shape is N,C
-                        std::vector<int64_t> mv_shape = {gi[in0][0], groups};
-                        gi[out1] = mv_shape;
-                        gi[out2] = mv_shape;
-                    } else {
-                        fprintf(stderr,
-                                "graph: GroupNorm output number "
-                                "mismatch!\n");
-                        SAFE_V(FAIL);
-                    }
-                }
-                break;
-            // infer_norm_output_shape
             case dnnl::graph::op::kind::LayerNorm:
                 in0 = aop.in_lts_[0].id_;
                 out0 = aop.out_lts_[0].id_;
@@ -543,7 +517,7 @@ void flex_rewrite::infer_output_shape(
                         fprintf(stderr,
                                 "graph: LayerNorm output number "
                                 "mismatch!\n");
-                        SAFE_V(FAIL);
+                        exit(2);
                     }
                 }
                 break;
@@ -741,15 +715,14 @@ bool flex_rewrite::get_inport_shape_stride(const std::string &in_shape,
     size_t in_length = in_shape.size();
     size_t star_pos = in_shape.find('*');
     const static std::string err_msg
-            = "A shape is expected in the form of `NUMxNUMxNUM...`. A tag must "
-              "be composed of letters only.";
+            = "Make sure shape is in the form of `NUMxNUMxNUM...`. And the tag "
+              "is only composed of letters. ";
     // shape and stride are provided
     if (star_pos != std::string::npos) {
         // invalid CML info, e.g. "1x2x3*", "*abc"
         if (star_pos == 0 || star_pos == in_length - 1) {
-            msg = "A shape must be provided before the `*`, a tag - after the "
-                  "`*`. Alternatively, remove the `*` to apply the default "
-                  "shape or stride.";
+            msg = "Please provide shape before `*` or tag after "
+                  "`*`, or remove `*` if you apply the default shape or stride";
             return false;
         }
         shape = in_shape.substr(0, star_pos);
@@ -777,8 +750,9 @@ void flex_rewrite::inports_shape_rewrite(
         deserialized_graph &dgraph, bool &change_stride) {
     // reminder mb rewrite status
     if (mb_ != 0 && dgraph.graph_inputs_with_mb_.empty()) {
-        BENCHDNN_PRINT(0,
-                "Error: flex_rewrite: can't rewrite mb value with \'%ld\'.\n",
+        BENCHDNN_PRINT(1,
+                "graph: rewrite: Cannot rewrite mb as "
+                "%ld!\n",
                 (long)mb_);
     }
 
@@ -822,7 +796,8 @@ void flex_rewrite::inports_shape_rewrite(
                     in_shapes_[lt.id_], new_shape, new_stride, message);
             if (!result) {
                 BENCHDNN_PRINT(0,
-                        "Error: `--in-shapes` is not valid. Reason: %s\n",
+                        "graph: `--in-shapes` is not valid: \n%s\n"
+                        "Please check the CML\n",
                         message.c_str());
                 SAFE_V(FAIL);
             }
@@ -850,15 +825,18 @@ void flex_rewrite::inports_shape_rewrite(
                 if (!new_stride.empty()) {
                     if (new_shape_dims.size() != new_stride.size()) {
                         BENCHDNN_PRINT(0,
-                                "Error: the shape size (`%zu`) must coinside "
-                                "with the stride size (`%zu`).\n",
-                                new_shape_dims.size(), new_stride.size());
+                                "graph: Shape size is `%d`, stride size is "
+                                "`%d`, they are not of the same size, "
+                                "please check the CML\n",
+                                static_cast<int>(new_shape_dims.size()),
+                                static_cast<int>(new_stride.size()));
                         SAFE_V(FAIL);
                     }
                     if (!is_valid_stride(new_stride)) {
                         BENCHDNN_PRINT(0,
-                                "Error: the tag provided is not valid: `%s`: "
-                                "unexpected letters encountered.\n",
+                                "graph: Tag provided is not valid: `%s`, "
+                                "there exists unexpected letters, "
+                                "please check the CML\n",
                                 new_stride.c_str());
                         SAFE_V(FAIL);
                     }
@@ -884,15 +862,17 @@ void flex_rewrite::inports_shape_rewrite(
                 // this is not valid stride
                 if (new_shape.empty() && new_stride.size() != ndims) {
                     BENCHDNN_PRINT(0,
-                            "Error: the tag provided is not valid: `%s`: the "
-                            "tag size must be `%d`.\n",
+                            "graph: Tag provided is not valid: `%s`, "
+                            "tag size should be `%d`, "
+                            "please check the CML\n",
                             new_stride.c_str(), static_cast<int>(ndims));
                     SAFE_V(FAIL);
                 }
                 if (!is_valid_stride(new_stride)) {
                     BENCHDNN_PRINT(0,
-                            "Error: the tag provided is not valid: `%s`: "
-                            "unexpected letters encountered.\n",
+                            "graph: Tag provided is not valid: `%s`, there "
+                            "exists unexpected letters, "
+                            "please check the CML\n",
                             new_stride.c_str());
                     SAFE_V(FAIL);
                 }
@@ -914,6 +894,15 @@ void flex_rewrite::inports_shape_rewrite(
     for (auto &lt : aop.out_lts_) {
         set_default_deserialized_lt(lt);
     }
+
+    std::string shapes_str;
+    for (const auto &graph_input : dgraph.graph_tensors_) {
+        std::string shape_str = std::to_string(graph_input.first) + ":"
+                + shape_to_string(graph_input.second) + " ";
+        shapes_str += shape_str;
+    }
+    BENCHDNN_PRINT(
+            1, "Graph input tensor ids and shapes: %s\n", shapes_str.c_str());
 }
 
 void flex_rewrite::op_attrs_rewrite(deserialized_graph &dgraph) {
@@ -927,7 +916,7 @@ void flex_rewrite::op_attrs_rewrite(deserialized_graph &dgraph) {
         if (iter == op_ids_.end()) {
             BENCHDNN_PRINT(0, "graph: rewrite: no op id %zd in the graph.\n",
                     temp_attrs.first);
-            SAFE_V(FAIL);
+            exit(2);
         }
         auto &temp_op = dgraph.ops_[std::distance(op_ids_.begin(), iter)];
         const auto attrs = parse_attrs(temp_attrs.second);
@@ -937,7 +926,7 @@ void flex_rewrite::op_attrs_rewrite(deserialized_graph &dgraph) {
                 BENCHDNN_PRINT(0,
                         "graph: rewrite: no attr name `%s` in op %zd.\n",
                         attr_name.c_str(), temp_attrs.first);
-                SAFE_V(FAIL);
+                exit(2);
             }
             auto new_val = new_attr.second;
             auto attr_type = temp_op.attrs_[attr_name].type_;
@@ -988,18 +977,24 @@ void flex_rewrite::quantized_graph_rewrite(deserialized_graph &dgraph) {
             continue;
         if (is_int8 && attr.find("zps") == attr.end()) continue;
 
-        const auto &pre_scales = attr["scales"].f32_vector_;
-        const auto pre_scales_size = pre_scales.size();
+        auto pre_scales = attr["scales"].f32_vector_;
         int64_t axis = 1;
         auto ndims = aop.in_lts_.front().shape_.size();
         if (attr.find("axis") != attr.end()) {
             axis = (attr["axis"].s64_value_ + ndims) % ndims;
         }
         const int64_t scales_zp_dim = aop.in_lts_.front().shape_[axis];
-        std::vector<float> scales(scales_zp_dim);
+        std::vector<float> scales(scales_zp_dim, pre_scales[0]);
 
-        for (int64_t i = 0; i < scales_zp_dim; i++)
-            scales[i] = pre_scales[i % pre_scales_size];
+        attr_t::arg_scales_t::entry_t e(policy_t::PER_OC);
+        const dnnl_dims_t scales_dims {scales_zp_dim};
+        const auto scales_md
+                = dnn_mem_t::init_md(1, scales_dims, dnnl_f32, tag::abx);
+        dnn_mem_t scales_fp(scales_md, ::get_test_engine());
+        dnn_mem_t dummy;
+        fill_scales(e, dummy, scales_fp);
+        for (int i = 0; i < scales_fp.nelems(); i++)
+            scales[i] = scales_fp.get_elem(i);
         aop.attrs_["scales"].f32_vector_ = scales;
 
         if (is_int8) {
@@ -1014,17 +1009,6 @@ void flex_rewrite::quantized_graph_rewrite(deserialized_graph &dgraph) {
             }
             aop.attrs_["zps"].s64_vector_ = zps;
         }
-    }
-}
-
-void flex_rewrite::graph_attrs_rewrite(deserialized_graph &dgraph) {
-
-    // if the fpmath mode is specified by users through cml
-    if (fpmath_mode_ != "default") dgraph.set_fpmath_mode(fpmath_mode_);
-
-    for (auto &aop : dgraph.ops_) {
-        // save the graph-level config for ops
-        aop.fpmath_mode_ = dgraph.get_fpmath_mode();
     }
 }
 
@@ -1077,7 +1061,6 @@ void flex_rewrite::update_output_info(
         case dnnl::graph::op::kind::Exp:
         case dnnl::graph::op::kind::GELU:
         case dnnl::graph::op::kind::GELUBackward:
-        case dnnl::graph::op::kind::GroupNorm:
         case dnnl::graph::op::kind::HardSigmoid:
         case dnnl::graph::op::kind::HardSigmoidBackward:
         case dnnl::graph::op::kind::HardSwish:

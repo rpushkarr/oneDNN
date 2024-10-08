@@ -70,6 +70,9 @@ struct settings_t : public base_settings_t {
     std::vector<unsigned> runtime_dim_mask {0};
     std::vector<cross_engine_t> cross_engine {NONE};
 
+    // Just to increase the coverage, doesn't participate in prb construction.
+    std::vector<float> def_scale {0.125, 0.25, 0.5, 1, 2, 4, 8};
+
     const char *perf_template_csv() const {
         static const std::string args = "%sdt%,%ddt%,%stag%,%dtag%,%flags%";
         return perf_template_csv_base(args);
@@ -89,8 +92,11 @@ struct prb_t : public prb_dims_t {
     // A ctor with common interface across all drivers.
     prb_t(const settings_t &s)
         : prb_t(s.prb_dims, s.sdt[0], s.ddt[0], s.stag[0], s.dtag[0],
-                s.strides[0], s.attributes.front(), s.ctx_init[0], s.ctx_exe[0],
-                s.oflag[0], s.cross_engine[0], s.runtime_dim_mask[0]) {
+                s.strides[0],
+                settings_t::get_attr(s.scales[0], s.zero_points[0],
+                        s.post_ops[0], s.scratchpad_mode[0], s.fpmath_mode[0]),
+                s.ctx_init[0], s.ctx_exe[0], s.oflag[0], s.cross_engine[0],
+                s.runtime_dim_mask[0]) {
         SAFE_V(s.has_single_setup() ? OK : FAIL);
     }
 
@@ -192,7 +198,7 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
         const args_t &ref_args);
 std::vector<int> supported_exec_args(dir_t dir);
 int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
-        dnnl_primitive_t prim, const prb_t *prb, res_t *res,
+        dnnl_primitive_t prim, const prb_t *prb, res_t *res, dir_t dir,
         dnnl_primitive_t prim_ref = nullptr);
 
 void skip_unimplemented_prb(const prb_t *prb, res_t *res);

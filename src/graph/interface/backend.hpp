@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2020-2024 Intel Corporation
+ * Copyright 2020-2023 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,11 +38,11 @@ namespace impl {
 namespace graph {
 
 // forward declaration
-status_t register_dnnl_backend();
-status_t register_fake_backend();
+void register_dnnl_backend();
+void register_fake_backend();
 #ifdef DNNL_ENABLE_COMPILER_BACKEND
 // register graph compiler backend
-status_t register_compiler_backend();
+void register_compiler_backend();
 #endif
 
 class backend_t {
@@ -131,11 +131,10 @@ public:
         return inst;
     }
 
-    status_t register_backend(const backend_t *abackend) {
+    backend_t *register_backend(const backend_t *abackend) {
         auto has_colliding_name = [&](const backend_t *backend) {
             return backend->get_name().compare(abackend->get_name()) == 0;
         };
-
         auto backend_already_registered = [&]() {
             return std::find_if(sorted_backends_.begin(),
                            sorted_backends_.end(), has_colliding_name)
@@ -146,7 +145,10 @@ public:
             return l->get_priority() > r->get_priority();
         };
 
-        if (backend_already_registered()) { return status::runtime_error; }
+        if (backend_already_registered()) {
+            throw std::runtime_error(
+                    "backend name not unique: " + abackend->get_name());
+        }
 
         std::lock_guard<std::mutex> lock(m_);
 
@@ -154,7 +156,7 @@ public:
         sorted_backends_.emplace_back(abackend);
         std::sort(sorted_backends_.begin(), sorted_backends_.end(),
                 compare_priority);
-        return status::success;
+        return const_cast<backend_t *>(abackend);
     }
 
     // This interface will firstly register all available backends and then
@@ -194,7 +196,15 @@ private:
     backend_registry_t &operator=(const backend_registry_t &) = delete;
     backend_registry_t &operator=(backend_registry_t &&) = delete;
 
-    void invoke_backend_registration();
+    inline void invoke_backend_registration() {
+        std::call_once(register_flag_, []() {
+            register_dnnl_backend();
+            register_fake_backend();
+#ifdef DNNL_ENABLE_COMPILER_BACKEND
+            register_compiler_backend();
+#endif
+        });
+    }
 
     std::mutex m_;
 

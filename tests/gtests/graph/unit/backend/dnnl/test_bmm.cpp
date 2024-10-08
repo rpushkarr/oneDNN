@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -29,6 +29,9 @@ namespace utils = dnnl::graph::tests::unit::utils;
 TEST(test_bmm_execute_subgraph_int8, BmmU8u8f32) {
     graph::engine_t *engine = get_engine();
     graph::stream_t *strm = get_stream();
+
+    // u8 to s8 shift by using a reroder with 128 zps is not supported on gpu
+    SKIP_IF(engine->kind() == graph::engine_kind::gpu, "skip on gpu");
 
     std::string qtype = "per_tensor";
     // prepare fp32 data
@@ -101,7 +104,7 @@ TEST(test_bmm_execute_subgraph_int8, BmmU8u8f32) {
                       *strm),
             graph::status::success);
     // -------------------------case 2----------------------------------
-    graph::pass::pass_base_ptr apass = get_pass("x8x8x_matmul_post_ops");
+    graph::pass::pass_base_ptr apass = get_pass("x8x8x_matmul_post_ops_cpu");
     apass->run(g);
     ASSERT_EQ(g.get_num_partitions(), 1U);
     auto part = g.get_partitions()[0];
@@ -134,6 +137,9 @@ TEST(test_bmm_execute_subgraph_int8, BmmU8u8f32) {
 TEST(test_bmm_execute_subgraph_int8, BmmU8u8f32NonContiguous) {
     graph::engine_t *engine = get_engine();
     graph::stream_t *strm = get_stream();
+
+    // u8 to s8 shift by using a reroder with 128 zps is not supported on gpu
+    SKIP_IF(engine->kind() == graph::engine_kind::gpu, "skip on gpu");
 
     std::string qtype = "per_tensor";
     // prepare fp32 data
@@ -229,7 +235,7 @@ TEST(test_bmm_execute_subgraph_int8, BmmU8u8f32NonContiguous) {
                       *strm),
             graph::status::success);
     // -------------------------case 2----------------------------------
-    graph::pass::pass_base_ptr apass = get_pass("x8x8x_matmul_post_ops");
+    graph::pass::pass_base_ptr apass = get_pass("x8x8x_matmul_post_ops_cpu");
     apass->run(g);
     ASSERT_EQ(g.get_num_partitions(), 1U);
     auto part = g.get_partitions()[0];
@@ -262,6 +268,9 @@ TEST(test_bmm_execute_subgraph_int8, BmmU8u8f32NonContiguous) {
 TEST(test_bmm_execute_subgraph_int8, BmmDivU8u8f32) {
     graph::engine_t *engine = get_engine();
     graph::stream_t *strm = get_stream();
+
+    // u8 to s8 shift by using a reroder with 128 zps is not supported on gpu
+    SKIP_IF(engine->kind() == graph::engine_kind::gpu, "skip on gpu");
 
     std::string qtype = "per_tensor";
     // prepare fp32 data
@@ -345,7 +354,10 @@ TEST(test_bmm_execute_subgraph_int8, BmmDivU8u8f32) {
     g.add_op(&binary_op);
     g.finalize();
 
-    graph::pass::pass_base_ptr apass = get_pass("x8x8x_matmul_post_ops");
+    graph::pass::pass_base_ptr apass
+            = get_pass(engine->kind() == graph::engine_kind::gpu
+                            ? "x8s8x_matmul_post_ops_gpu"
+                            : "x8x8x_matmul_post_ops_cpu");
     apass->run(g);
     ASSERT_EQ(g.get_num_partitions(), 1U);
     auto part = g.get_partitions()[0];
@@ -375,6 +387,9 @@ TEST(test_bmm_execute_subgraph_int8, BmmDivU8u8f32) {
 TEST(test_bmm_execute_subgraph_int8, BmmDivAddU8u8f32) {
     graph::engine_t *engine = get_engine();
     graph::stream_t *strm = get_stream();
+
+    // u8 to s8 shift by using a reroder with 128 zps is not supported on gpu
+    SKIP_IF(engine->kind() == graph::engine_kind::gpu, "skip on gpu");
 
     std::string qtype = "per_tensor";
     // prepare fp32 data
@@ -474,7 +489,7 @@ TEST(test_bmm_execute_subgraph_int8, BmmDivAddU8u8f32) {
     g.add_op(&binary_op2);
     g.finalize();
 
-    graph::pass::pass_base_ptr apass = get_pass("x8x8x_matmul_post_ops");
+    graph::pass::pass_base_ptr apass = get_pass("x8x8x_matmul_post_ops_cpu");
     apass->run(g);
     ASSERT_EQ(g.get_num_partitions(), 1U);
     auto part = g.get_partitions()[0];
@@ -503,9 +518,12 @@ TEST(test_bmm_execute_subgraph_int8, BmmDivAddU8u8f32) {
     strm->wait();
 }
 
-TEST(test_bmm_execute_subgraph_int8, BmmX8x8bf16_CPU) {
+TEST(test_bmm_execute_subgraph_int8, BmmX8x8bf16) {
     graph::engine_t *engine = get_engine();
     graph::stream_t *strm = get_stream();
+
+    // gpu doesn't support mixed int8-bf16 matmul with runtime zero points
+    SKIP_IF(engine->kind() == graph::engine_kind::gpu, "skip on gpu");
 
     std::vector<std::string> dtypes = {"uint8", "int8"};
 
@@ -526,6 +544,8 @@ TEST(test_bmm_execute_subgraph_int8, BmmX8x8bf16_CPU) {
             float src_range = (src_dtype == "uint8") ? 255.f : 127.f;
             float weight_range = (weight_dtype == "uint8") ? 255.f : 127.f;
 
+            // u8 2 s8 shift by using reorder with -128 zps is not supported on
+            // GPU
             if (weight_dtype == "uint8"
                     && engine->kind() == graph::engine_kind::gpu)
                 continue;
@@ -615,7 +635,9 @@ TEST(test_bmm_execute_subgraph_int8, BmmX8x8bf16_CPU) {
             g.finalize();
 
             graph::pass::pass_base_ptr apass
-                    = get_pass("x8x8x_tc_matmul_post_ops");
+                    = get_pass(engine->kind() == graph::engine_kind::gpu
+                                    ? "x8s8x_tc_matmul_post_ops_gpu"
+                                    : "x8x8x_tc_matmul_post_ops_cpu");
             apass->run(g);
             ASSERT_EQ(g.get_num_partitions(), 1U);
             auto part = g.get_partitions()[0];
@@ -640,7 +662,7 @@ TEST(test_bmm_execute_subgraph_int8, BmmX8x8bf16_CPU) {
     }
 }
 
-TEST(test_bmm_execute_subgraph_int8, BmmDivX8x8bf16_CPU) {
+TEST(test_bmm_execute_subgraph_int8, BmmDivX8x8bf16) {
     graph::engine_t *engine = get_engine();
     graph::stream_t *strm = get_stream();
 
@@ -665,6 +687,12 @@ TEST(test_bmm_execute_subgraph_int8, BmmDivX8x8bf16_CPU) {
                     : graph::data_type::s8;
             float src_range = (src_dtype == "uint8") ? 255.f : 127.f;
             float weight_range = (weight_dtype == "uint8") ? 255.f : 127.f;
+
+            // u8 2 s8 shift by using reorder with -128 zps is not supported on
+            // GPU
+            if (weight_dtype == "uint8"
+                    && engine->kind() == graph::engine_kind::gpu)
+                continue;
 
             // random generate src, weight data
             // random seed = 7
@@ -764,7 +792,9 @@ TEST(test_bmm_execute_subgraph_int8, BmmDivX8x8bf16_CPU) {
             ASSERT_EQ(g.finalize(), graph::status::success);
 
             graph::pass::pass_base_ptr apass
-                    = get_pass("x8x8x_tc_matmul_post_ops");
+                    = get_pass(engine->kind() == graph::engine_kind::gpu
+                                    ? "x8s8x_tc_matmul_post_ops_gpu"
+                                    : "x8x8x_tc_matmul_post_ops_cpu");
             apass->run(g);
             ASSERT_EQ(g.get_num_partitions(), 1U);
             auto part = g.get_partitions()[0];
@@ -793,9 +823,17 @@ TEST(test_bmm_execute_subgraph_int8, BmmDivX8x8bf16_CPU) {
     }
 }
 
-TEST(test_bmm_execute_subgraph_int8, BmmDivBlockedX8x8bf16_CPU) {
+TEST(test_bmm_execute_subgraph_int8, BmmDivBlockedX8x8bf16) {
     graph::engine_t *engine = get_engine();
     graph::stream_t *strm = get_stream();
+
+    // The below case will be skipped on GPU:
+    // benchdnn --matmul --reset --allow-enum-tags-only=0 --engine=gpu
+    // --cfg=u8s8bf16  --stag=acbd --wtag=adbc --dtag=abcd
+    // --attr-post-ops=binary_div:bf16:common --attr-oscale=common:3.087849e-05
+    // --attr-zero-points=src:common:110+wei:common:114 --attr-scratchpad=user
+    // 1x4x16x8:1x4x8x16:1x4x16x16
+    SKIP_IF(engine->kind() == graph::engine_kind::gpu, "skip on gpu");
 
     std::vector<std::string> dtypes = {"uint8", "int8"};
 
@@ -817,6 +855,12 @@ TEST(test_bmm_execute_subgraph_int8, BmmDivBlockedX8x8bf16_CPU) {
                     : graph::data_type::s8;
             float src_range = (src_dtype == "uint8") ? 255.f : 127.f;
             float weight_range = (weight_dtype == "uint8") ? 255.f : 127.f;
+
+            // u8 2 s8 shift by using reorder with -128 zps is not supported on
+            // GPU
+            if (weight_dtype == "uint8"
+                    && engine->kind() == graph::engine_kind::gpu)
+                continue;
 
             // random generate src, weight data
             // random seed = 7
@@ -916,7 +960,7 @@ TEST(test_bmm_execute_subgraph_int8, BmmDivBlockedX8x8bf16_CPU) {
             g.finalize();
 
             graph::pass::pass_base_ptr apass
-                    = get_pass("x8x8x_tc_matmul_post_ops");
+                    = get_pass("x8x8x_tc_matmul_post_ops_cpu");
             apass->run(g);
             ASSERT_EQ(g.get_num_partitions(), 1U);
             auto part = g.get_partitions()[0];
@@ -945,7 +989,7 @@ TEST(test_bmm_execute_subgraph_int8, BmmDivBlockedX8x8bf16_CPU) {
     }
 }
 
-TEST(test_bmm_execute_subgraph_int8, BmmDivAddX8x8bf16_CPU) {
+TEST(test_bmm_execute_subgraph_int8, BmmDivAddX8x8bf16) {
     graph::engine_t *engine = get_engine();
     graph::stream_t *strm = get_stream();
 
@@ -977,6 +1021,12 @@ TEST(test_bmm_execute_subgraph_int8, BmmDivAddX8x8bf16_CPU) {
                     : graph::data_type::s8;
             float src_range = (src_dtype == "uint8") ? 255.f : 127.f;
             float weight_range = (weight_dtype == "uint8") ? 255.f : 127.f;
+
+            // u8 2 s8 shift by using reorder with -128 zps is not supported on
+            // GPU
+            if (weight_dtype == "uint8"
+                    && engine->kind() == graph::engine_kind::gpu)
+                continue;
 
             // random generate src, weight data
             // random seed = 7
@@ -1089,7 +1139,9 @@ TEST(test_bmm_execute_subgraph_int8, BmmDivAddX8x8bf16_CPU) {
             g.finalize();
 
             graph::pass::pass_base_ptr apass
-                    = get_pass("x8x8x_tc_matmul_post_ops");
+                    = get_pass(engine->kind() == graph::engine_kind::gpu
+                                    ? "x8s8x_tc_matmul_post_ops_gpu"
+                                    : "x8x8x_tc_matmul_post_ops_cpu");
             apass->run(g);
             ASSERT_EQ(g.get_num_partitions(), 1U);
             auto part = g.get_partitions()[0];
@@ -1223,7 +1275,10 @@ TEST(test_bmm_execute_subgraph_int8, BmmMulAddTransposeBU8s8f32) {
     g.add_op(&binary_op2);
     g.finalize();
 
-    graph::pass::pass_base_ptr apass = get_pass("x8x8x_matmul_post_ops");
+    graph::pass::pass_base_ptr apass
+            = get_pass(engine->kind() == graph::engine_kind::gpu
+                            ? "x8s8x_matmul_post_ops_gpu"
+                            : "x8x8x_matmul_post_ops_cpu");
     apass->run(g);
     ASSERT_EQ(g.get_num_partitions(), 1U);
     auto part = g.get_partitions()[0];

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2024 Intel Corporation
+* Copyright 2017-2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -42,20 +42,18 @@ struct ref_concat_t : public primitive_t {
 
         status_t init(engine_t *engine) {
             using sm = primitive_attr_t::skip_mask_t;
-            VDISPATCH_CONCAT(attr()->has_default_values(sm::scales_runtime),
-                    VERBOSE_UNSUPPORTED_ATTR);
+            if (!attr()->has_default_values(sm::scales_runtime))
+                return status::unimplemented;
             status_t status = cpu_concat_pd_t::init();
             if (status != status::success) {
                 assert(dst_md_.format_kind != format_kind::undef);
                 status = memory_desc_init_by_strides(tent_dst_md_,
                         dst_md_.ndims, dst_md_.dims, dst_md_.data_type,
                         nullptr);
-                VDISPATCH_CONCAT(status == status::success,
-                        VERBOSE_UNSUPPORTED_MEM_STRIDE);
+                if (status != status::success) return status::unimplemented;
 
                 status = cpu_concat_pd_t::init(&tent_dst_md_);
-                VDISPATCH_CONCAT(status == status::success,
-                        VERBOSE_PRIMITIVE_CREATION_FAIL, "concat");
+                if (status != status::success) return status::unimplemented;
             }
 
             const auto &sc = attr()->scales_;
@@ -145,10 +143,8 @@ struct ref_concat_t : public primitive_t {
                     = scratchpad.get_memory_storage(key_concat_tent_dst);
 
             for (int i = 0; i < n; ++i) {
-                std::unique_ptr<memory_t, memory_deleter_t> tent_dst_i;
-                CHECK(safe_ptr_assign(tent_dst_i,
-                        new memory_t(engine, pd()->src_image_md(i),
-                                tent_dst_storage->clone())));
+                memory_t tent_dst_i(engine, pd()->src_image_md(i),
+                        tent_dst_storage->clone());
                 const auto &src_scales_arg = ctx.args().find(
                         DNNL_ARG_ATTR_SCALES | (DNNL_ARG_MULTIPLE_SRC + i));
                 const memory_arg_t *src_scales = nullptr;
@@ -156,22 +152,18 @@ struct ref_concat_t : public primitive_t {
                     src_scales = &src_scales_arg->second;
                 execute_reorder(reorders_[i],
                         ctx.args().at(DNNL_ARG_MULTIPLE_SRC + i),
-                        {tent_dst_i.get(), false}, src_scales, i);
+                        {&tent_dst_i, false}, src_scales, i);
             }
 
-            std::unique_ptr<memory_t, memory_deleter_t> tent_dst;
-            CHECK(safe_ptr_assign(tent_dst,
-                    new memory_t(engine, &pd()->tent_dst_md_,
-                            tent_dst_storage->clone())));
-            execute_reorder(reorders_[n], {tent_dst.get(), true},
+            memory_t tent_dst(
+                    engine, &pd()->tent_dst_md_, tent_dst_storage->clone());
+            execute_reorder(reorders_[n], {&tent_dst, true},
                     ctx.args().at(DNNL_ARG_DST), nullptr, n);
         } else {
             auto &dst_mem_storage = CTX_OUT_STORAGE(DNNL_ARG_DST);
             for (int i = 0; i < n; ++i) {
-                std::unique_ptr<memory_t, memory_deleter_t> tent_dst_i;
-                CHECK(safe_ptr_assign(tent_dst_i,
-                        new memory_t(engine, pd()->src_image_md(i),
-                                dst_mem_storage.clone())));
+                memory_t tent_dst_i(
+                        engine, pd()->src_image_md(i), dst_mem_storage.clone());
                 const auto &src_scales_arg = ctx.args().find(
                         DNNL_ARG_ATTR_SCALES | (DNNL_ARG_MULTIPLE_SRC + i));
                 const memory_arg_t *src_scales = nullptr;
@@ -179,7 +171,7 @@ struct ref_concat_t : public primitive_t {
                     src_scales = &src_scales_arg->second;
                 execute_reorder(reorders_[i],
                         ctx.args().at(DNNL_ARG_MULTIPLE_SRC + i),
-                        {tent_dst_i.get(), false}, src_scales, i);
+                        {&tent_dst_i, false}, src_scales, i);
             }
         }
         return status::success;

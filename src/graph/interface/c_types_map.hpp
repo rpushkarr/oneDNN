@@ -24,10 +24,6 @@
 #include "oneapi/dnnl/dnnl_graph_sycl.h"
 #include "oneapi/dnnl/dnnl_graph_types.h"
 
-#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
-#include "oneapi/dnnl/dnnl_graph_ocl.h"
-#endif
-
 namespace dnnl {
 namespace impl {
 namespace graph {
@@ -154,7 +150,6 @@ const op_kind_t End = dnnl_graph_op_end;
 const op_kind_t Exp = dnnl_graph_op_exp;
 const op_kind_t GELU = dnnl_graph_op_gelu;
 const op_kind_t GELUBackward = dnnl_graph_op_gelu_backward;
-const op_kind_t GroupNorm = dnnl_graph_op_group_norm;
 const op_kind_t HardSigmoid = dnnl_graph_op_hard_sigmoid;
 const op_kind_t HardSigmoidBackward = dnnl_graph_op_hard_sigmoid_backward;
 const op_kind_t HardSwish = dnnl_graph_op_hard_swish;
@@ -265,10 +260,6 @@ const op_attr_t mode = dnnl_graph_op_attr_mode;
 const op_attr_t qtype = dnnl_graph_op_attr_qtype;
 const op_attr_t rounding_type = dnnl_graph_op_attr_rounding_type;
 
-// Used to indicate the end of all external attributes, note all the new
-// attribute should be added above this one.
-const op_attr_t end = dnnl_graph_op_attr_end;
-
 // internal attributes
 const op_attr_t matched = 0x100;
 const op_attr_t backend = 0x101;
@@ -308,10 +299,6 @@ using host_allocate_f = dnnl_graph_host_allocate_f;
 using host_deallocate_f = dnnl_graph_host_deallocate_f;
 using sycl_allocate_f = dnnl_graph_sycl_allocate_f;
 using sycl_deallocate_f = dnnl_graph_sycl_deallocate_f;
-#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
-using ocl_allocate_f = dnnl_graph_ocl_allocate_f;
-using ocl_deallocate_f = dnnl_graph_ocl_deallocate_f;
-#endif
 using inplace_pair_t = dnnl_graph_inplace_pair_t;
 
 using graph_t = dnnl_graph_graph;

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -461,8 +461,9 @@ void jit_pp_ker_t::generate() {
         }
 
         if (saturation_needed_) {
-            saturate_cvt_f32(get_vreg_dst(idx), vreg_zero_,
-                    vreg_saturation_ubound_, jcp_.dst_data_type);
+            saturate_f32(get_vreg_dst(idx), vreg_zero_, vreg_saturation_ubound_,
+                    jcp_.dst_data_type);
+            vcvtps2dq(vreg_dst_masked, vreg_dst);
         }
 
         switch (jcp_.dst_data_type) {
@@ -685,8 +686,7 @@ void jit_pp_ker_t::generate() {
 
     postamble();
 
-    if (jcp_.with_eltwise)
-        postops_injector_->prepare_table(/* generate = */ true);
+    if (jcp_.with_eltwise) postops_injector_->prepare_table();
 }
 
 bool mayiuse_jit_pp_kernel(data_type_t dst_dt) noexcept {

@@ -17,7 +17,6 @@
 #include "oneapi/dnnl/dnnl.h"
 
 #include "c_types_map.hpp"
-#include "math_utils.hpp"
 #include "primitive_attr.hpp"
 #include "type_helpers.hpp"
 #include "utils.hpp"
@@ -109,19 +108,6 @@ status_t zero_points_t::set(int arg, int mask, int ndims, const dims_t groups,
     return status::success;
 }
 
-status_t dropout_t::set_default_formats(const memory_desc_t *dst_md) {
-    auto is_any_or_undef = [](format_kind_t kind) {
-        return one_of(kind, dnnl_format_kind_any, dnnl_format_kind_undef);
-    };
-    const bool dst_ok = dst_md && !is_any_or_undef(dst_md->format_kind);
-    if (dst_ok && is_any_or_undef(dropout_desc_.format_kind)) {
-        const memory_desc_wrapper dst_mdw(dst_md);
-        CHECK(memory_desc_init_by_blocking_desc(
-                dropout_desc_, dst_mdw.blocking_desc()));
-    }
-    return (dst_ok) ? status::success : status::invalid_arguments;
-}
-
 } // namespace impl
 } // namespace dnnl
 
@@ -168,10 +154,6 @@ bool primitive_attr_t::has_default_values(dnnl_primitive_attr::skip_mask_t mask,
             utils::one_of(acc_mode_, dnnl::impl::accumulation_mode::strict,
                     dnnl::impl::accumulation_mode::relaxed,
                     dnnl::impl::accumulation_mode::any)));
-    CHECK_ARG(IMPLICATION(
-            (bool)(~mask & smask_t::dropout), dropout_.has_default_values()));
-    CHECK_ARG(IMPLICATION((bool)(~mask & smask_t::rounding_mode),
-            rounding_mode_.has_default_values()));
     CHECK_ARG(this->defined(defined_mask));
     bool fpmath_mode_ok = IMPLICATION(
             (bool)(~mask & smask_t::fpmath_mode) && fpmath_.apply_to_int_,
@@ -398,13 +380,6 @@ bool post_ops_t::check_sum_consistency(const data_type_t dst_dt,
             && check_sum_consistent_quantization(dst_dt, is_int8);
 }
 
-status_t primitive_attr_t::set_dropout(const memory_desc_t *user_dropout_desc) {
-    if (any_null(user_dropout_desc)) return invalid_arguments;
-    dropout_.user_dropout_desc_ = *user_dropout_desc;
-    dropout_.dropout_desc_ = *user_dropout_desc;
-    return success;
-}
-
 status_t primitive_attr_t::set_fpmath_mode(
         fpmath_mode_t fpmath_mode, bool apply_to_int) {
     auto st = check_fpmath_mode(fpmath_mode);
@@ -443,9 +418,7 @@ status_t primitive_attr_t::set_post_ops(const post_ops_t &post_ops) {
 }
 
 status_t primitive_attr_t::set_default_formats(const memory_desc_t *dst_md) {
-    CHECK(post_ops_.set_default_formats(dst_md));
-    CHECK(dropout_.set_default_formats(dst_md));
-    return status::success;
+    return post_ops_.set_default_formats(dst_md);
 }
 
 status_t primitive_attr_t::set_gpu_attr(const primitive_attr_item_t &gpu_attr) {
@@ -475,20 +448,6 @@ status_t dnnl_primitive_attr_destroy(primitive_attr_t *attr) {
     delete attr;
 
     return success;
-}
-
-status_t dnnl_primitive_attr_get_dropout(
-        const primitive_attr_t *attr, const memory_desc_t **user_dropout_desc) {
-    if (any_null(attr)) return invalid_arguments;
-    if (user_dropout_desc)
-        *user_dropout_desc = &attr->dropout_.user_dropout_desc_;
-    return success;
-}
-
-status_t dnnl_primitive_attr_set_dropout(
-        primitive_attr_t *attr, const memory_desc_t *user_dropout_desc) {
-    if (any_null(attr)) return invalid_arguments;
-    return attr->set_dropout(user_dropout_desc);
 }
 
 status_t dnnl_primitive_attr_get_fpmath_mode(
@@ -570,19 +529,12 @@ status_t dnnl_primitive_attr_set_scales_mask(
 status_t dnnl_primitive_attr_set_scales(primitive_attr_t *attr, int arg,
         int mask, int ndims, const dims_t group_dims, data_type_t data_type) {
     using namespace data_type;
-    VCHECK_ATTR(attr, VERBOSE_NULL_ARG);
-    VCHECK_ATTR(mask >= 0, VERBOSE_BAD_PARAM, "mask");
-    VCHECK_ATTR(arg >= 0, VERBOSE_BAD_PARAM, "arg");
-    VCHECK_ATTR(ndims >= 0, VERBOSE_BAD_PARAM, "ndims");
-    VCHECK_ATTR(utils::one_of(data_type, f32, bf16, f16, e8m0),
-            VERBOSE_INVALID_DATATYPE, "scales");
-    VCHECK_ATTR(IMPLICATION(!utils::one_of(arg, DNNL_ARG_SRC, DNNL_ARG_WEIGHTS),
-                        data_type == f32 && ndims == 0)
-                    || IMPLICATION(arg == DNNL_ARG_DST,
-                            utils::one_of(data_type, f32, e8m0)),
-            VERBOSE_INVALID_DATATYPE, "scales");
-    VCHECK_ATTR(IMPLICATION(ndims, validate_dims(ndims, group_dims)),
-            VERBOSE_BAD_PARAM, "group_dims");
+    bool ok = attr && mask >= 0 && arg >= 0 && ndims >= 0
+            && utils::one_of(data_type, f32, bf16, f16)
+            && IMPLICATION(
+                    arg != DNNL_ARG_WEIGHTS, data_type == f32 && ndims == 0)
+            && IMPLICATION(ndims, validate_dims(ndims, group_dims));
+    if (!ok) return invalid_arguments;
     return attr->scales_.set(arg, mask, ndims, group_dims, data_type);
 }
 
@@ -599,27 +551,13 @@ dnnl_status_t DNNL_API dnnl_primitive_attr_set_zero_points(
         const dnnl_dims_t group_dims, dnnl_data_type_t data_type) {
     using namespace data_type;
     bool ok = attr && arg >= 0 && mask >= 0 && ndims >= 0
-            && utils::one_of(data_type, s32, s8, u8, s4, u4)
+            && utils::one_of(data_type, s32, s8, u8)
             && IMPLICATION(
                     arg != DNNL_ARG_WEIGHTS, data_type == s32 && ndims == 0)
-            && IMPLICATION(utils::one_of(data_type, s4, u4), mask > 0)
             && IMPLICATION(ndims, validate_dims(ndims, group_dims));
     if (!ok) return invalid_arguments;
 
     return attr->zero_points_.set(arg, mask, ndims, group_dims, data_type);
-}
-
-status_t dnnl_primitive_attr_get_rounding(
-        primitive_attr_t *attr, int arg, dnnl_rounding_mode_t *mode) {
-    if (any_null(attr, mode)) return invalid_arguments;
-    *mode = attr->rounding_mode_.get(arg);
-    return success;
-}
-
-status_t dnnl_primitive_attr_set_rounding(
-        primitive_attr_t *attr, int arg, dnnl_rounding_mode_t mode) {
-    if (attr == nullptr) return invalid_arguments;
-    return attr->rounding_mode_.set(arg, mode);
 }
 
 status_t dnnl_primitive_attr_get_post_ops(

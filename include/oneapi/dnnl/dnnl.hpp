@@ -300,23 +300,6 @@ inline dnnl_scratchpad_mode_t convert_to_c(scratchpad_mode mode) {
     return static_cast<dnnl_scratchpad_mode_t>(mode);
 }
 
-/// Rounding mode
-enum class rounding_mode {
-    /// rounding mode dictated by the floating-point environment
-    environment = dnnl_rounding_mode_environment,
-    /// stochastic rounding mode where a random bias is added to the
-    /// trailing mantissa bits before conversion.
-    stochastic = dnnl_rounding_mode_stochastic
-};
-
-/// Converts a rounding mode enum value from C++ API to C API type.
-///
-/// @param mode C++ API rounding mode enum value.
-/// @returns Corresponding C API rounding mode enum value.
-inline dnnl_rounding_mode_t convert_to_c(rounding_mode mode) {
-    return static_cast<dnnl_rounding_mode_t>(mode);
-}
-
 /// Propagation kind.
 enum class prop_kind {
     /// Undefined propagation kind.
@@ -852,10 +835,6 @@ struct memory : public handle<dnnl_memory_t> {
     enum class data_type {
         /// Undefined data type (used for empty memory descriptors).
         undef = dnnl_data_type_undef,
-        /// [MX-compliant 4-bit float data type](https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf) with 2-bit exponent and 1 bit mantissa.
-        f4_e2m1 = dnnl_f4_e2m1,
-        /// [MX-compliant 8-bit compliant scale data type](https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf) with 8-bit exponent.
-        e8m0 = dnnl_e8m0,
         /// [OFP8 standard 8-bit floating-point](https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-0-2023-06-20-pdf)
         /// with a 5-bit exponent and a 2-bit mantissa.
         f8_e5m2 = dnnl_f8_e5m2,
@@ -877,10 +856,6 @@ struct memory : public handle<dnnl_memory_t> {
         s8 = dnnl_s8,
         /// 8-bit unsigned integer.
         u8 = dnnl_u8,
-        /// 4-bit signed integer.
-        s4 = dnnl_s4,
-        /// 4-bit unsigned integer.
-        u4 = dnnl_u4,
     };
 
     /// Returns size of data type in bytes.
@@ -920,8 +895,6 @@ struct memory : public handle<dnnl_memory_t> {
             /// only be used to create a primitive descriptor to query the
             /// actual memory descriptor (similar to the format tag `any`).
             packed = dnnl_packed,
-            /// Coordinate Sparse (COO) encoding.
-            coo = dnnl_coo,
     };
 #endif
 
@@ -1217,7 +1190,6 @@ struct memory : public handle<dnnl_memory_t> {
         AB16b64a2b = dnnl_AB16b64a2b,
         Ab4a = dnnl_Ab4a,
         Ab8a = dnnl_Ab8a,
-        Ab32a = dnnl_Ab32a,
         Abc16a = dnnl_Abc16a,
         ABc16a16b = dnnl_ABc16a16b,
         ABc4a4b = dnnl_ABc4a4b,
@@ -2708,19 +2680,6 @@ struct memory : public handle<dnnl_memory_t> {
         gIhwO24i4o = dnnl_gIhwO24i4o,
         gIdhwO8i4o = dnnl_gIdhwO8i4o,
         gIdhwO24i4o = dnnl_gIdhwO24i4o,
-        BA2a24b = dnnl_BA2a24b,
-        aCB2b24c = dnnl_aCB2b24c,
-        BA2a8b = dnnl_BA2a8b,
-        aCB2b8c = dnnl_aCB2b8c,
-        BA8a24b = dnnl_BA8a24b,
-        aCB8b24c = dnnl_aCB8b24c,
-        BA8a16b = dnnl_BA8a16b,
-        aCB8b16c = dnnl_aCB8b16c,
-        BA8a8b = dnnl_BA8a8b,
-        aCB8b8c = dnnl_aCB8b8c,
-        bcad = dnnl_bcad,
-        cabd = dnnl_cabd,
-        dabc = dnnl_dabc,
     };
 
     /// A memory descriptor.
@@ -2829,38 +2788,6 @@ struct memory : public handle<dnnl_memory_t> {
             if (!allow_empty)
                 error::wrap_c_api(status,
                         "could not create a memory descriptor for CSR sparse "
-                        "encoding");
-            return desc {md};
-        }
-
-        /// Function for creating a memory descriptor for COO sparse encodings.
-        ///
-        /// The created memory descriptor will describe a memory object that
-        /// contains n+1 buffers for an n-dimensional tensor.
-        /// The buffers have the following meaning and assigned numbers (index):
-        ///  - 0: values
-        ///  - 1: indices for dimension 0
-        ///  - 2: indices for dimension 1 ...
-        ///  - n: indices for dimension n-1
-        ///
-        /// @param adims Tensor dimensions.
-        /// @param adata_type Data precision/type.
-        /// @param nnz Number of non-zero entries.
-        /// @param index_dt Data type of indices.
-        /// @param allow_empty A flag signifying whether construction is
-        ///     allowed to fail without throwing an exception. In this case a
-        ///     zero memory descriptor will be constructed. This flag is
-        ///     optional and defaults to false.
-        static desc coo(const dims &adims, data_type adata_type, dim nnz,
-                data_type index_dt, bool allow_empty = false) {
-            validate_dims(adims);
-            dnnl_memory_desc_t md = nullptr;
-            dnnl_status_t status = dnnl_memory_desc_create_with_coo_encoding(
-                    &md, (int)adims.size(), adims.data(),
-                    convert_to_c(adata_type), nnz, convert_to_c(index_dt));
-            if (!allow_empty)
-                error::wrap_c_api(status,
-                        "could not create a memory descriptor for COO sparse "
                         "encoding");
             return desc {md};
         }
@@ -3959,28 +3886,6 @@ struct primitive_attr : public handle<dnnl_primitive_attr_t> {
     primitive_attr(dnnl_primitive_attr_t attr)
         : handle<dnnl_primitive_attr_t>(attr) {}
 
-    /// Returns the parameters of a dropout attribute.
-    ///
-    /// @param mask_desc Output memory descriptor of a dropout mask.
-    void get_dropout(memory::desc &mask_desc) const {
-        const_dnnl_memory_desc_t cdesc;
-        error::wrap_c_api(dnnl_primitive_attr_get_dropout(get(), &cdesc),
-                "could not get parameters of a dropout attribute");
-        dnnl_memory_desc_t cloned_md = nullptr;
-        error::wrap_c_api(dnnl_memory_desc_clone(&cloned_md, cdesc),
-                "could not clone a memory descriptor");
-        mask_desc = memory::desc(cloned_md);
-    }
-
-    /// Sets dropout probability.
-    ///
-    /// @param mask_desc Output memory descriptor of a dropout mask.
-    void set_dropout(const memory::desc &mask_desc) {
-        error::wrap_c_api(
-                dnnl_primitive_attr_set_dropout(get(), mask_desc.get()),
-                "could not set dropout primitive attribute");
-    }
-
     /// Returns the fpmath mode
     fpmath_mode get_fpmath_mode() const {
         dnnl_fpmath_mode_t result;
@@ -4048,27 +3953,6 @@ struct primitive_attr : public handle<dnnl_primitive_attr_t> {
                 "could not set deterministic primitive attribute");
     }
 
-    /// Returns the rounding mode attribute value
-    ///
-    /// @param arg Argument for which rounding mode query applies.
-    /// @returns The rounding mode applied to the specified argument.
-    rounding_mode get_rounding_mode(int arg) const {
-        dnnl_rounding_mode_t result;
-        error::wrap_c_api(dnnl_primitive_attr_get_rounding(get(), arg, &result),
-                "could not get rounding mode primitive attribute");
-        return rounding_mode(result);
-    }
-
-    /// Sets the rounding mode attribute value for a given argument
-    ///
-    /// @param arg Argument for which to set rounding mode.
-    /// @param mode Rounding mode to apply.
-    void set_rounding_mode(int arg, rounding_mode mode) {
-        error::wrap_c_api(dnnl_primitive_attr_set_rounding(
-                                  get(), arg, convert_to_c(mode)),
-                "could not set rounding mode primitive attribute");
-    }
-
     /// Returns the scratchpad mode.
     scratchpad_mode get_scratchpad_mode() const {
         dnnl_scratchpad_mode_t result;
@@ -4122,7 +4006,6 @@ struct primitive_attr : public handle<dnnl_primitive_attr_t> {
     ///     correspondence between the tensor dimensions and the scales array.
     ///     The set i-th dimension indicates a number of groups of scaling
     ///     factors used for that logical dimension in a memory indicated by @p arg.
-    /// @param data_type Scaling factors data_type.
     void set_scales(int arg, int mask, const memory::dims &groups,
             memory::data_type data_type = memory::data_type::f32) {
         error::wrap_c_api(dnnl_primitive_attr_set_scales(get(), arg, mask,
@@ -4167,7 +4050,6 @@ struct primitive_attr : public handle<dnnl_primitive_attr_t> {
     ///     correspondence between the tensor dimensions and the zero_points array.
     ///     The set i-th dimension indicates a number of groups of zero point
     ///     factors used for that logical dimension in a memory indicated by @p arg.
-    /// @param data_type Zero point factors data_type.
     void set_zero_points(int arg, int mask, const memory::dims &groups,
             memory::data_type data_type = memory::data_type::s32) {
         error::wrap_c_api(dnnl_primitive_attr_set_zero_points(get(), arg, mask,
@@ -13681,16 +13563,10 @@ enum class cpu_isa {
     avx512_core_vnni = dnnl_cpu_isa_avx512_core_vnni,
     /// @copydoc dnnl_cpu_isa_avx512_core_bf16
     avx512_core_bf16 = dnnl_cpu_isa_avx512_core_bf16,
-    /// @copydoc dnnl_cpu_isa_avx10_1_512
-    avx10_1_512 = dnnl_cpu_isa_avx10_1_512,
     /// @copydoc dnnl_cpu_isa_avx512_core_fp16
     avx512_core_fp16 = dnnl_cpu_isa_avx512_core_fp16,
-    /// @copydoc dnnl_cpu_isa_avx10_1_512_amx
-    avx10_1_512_amx = dnnl_cpu_isa_avx10_1_512_amx,
     /// @copydoc dnnl_cpu_isa_avx512_core_amx
     avx512_core_amx = dnnl_cpu_isa_avx512_core_amx,
-    /// @copydoc dnnl_cpu_isa_avx10_1_512_amx_fp16
-    avx10_1_512_amx_fp16 = dnnl_cpu_isa_avx10_1_512_amx_fp16,
     /// @copydoc dnnl_cpu_isa_avx512_core_amx_fp16
     avx512_core_amx_fp16 = dnnl_cpu_isa_avx512_core_amx_fp16,
 };

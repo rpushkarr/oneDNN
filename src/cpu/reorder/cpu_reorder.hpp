@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 * Copyright 2023 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,11 +33,9 @@
 
 #if DNNL_X64
 #include "cpu/x64/jit_uni_reorder.hpp"
-#include "cpu/x64/jit_uni_reorder_direct_copy.hpp"
 #include "cpu/x64/matmul/brgemm_matmul_reorders.hpp"
 #elif DNNL_AARCH64
 #include "cpu/aarch64/jit_uni_reorder.hpp"
-#include "cpu/aarch64/matmul/brgemm_matmul_reorders.hpp"
 #endif
 
 #if DNNL_AARCH64 && DNNL_AARCH64_USE_ACL
@@ -75,7 +73,6 @@ using impl_list_map_t
         = std::map<reorder_impl_key_t, std::vector<impl_list_item_t>>;
 
 /* regular reorders */
-extern const impl_list_map_t &regular_fp4_impl_list_map();
 extern const impl_list_map_t &regular_f32_fp8_impl_list_map();
 extern const impl_list_map_t &regular_f32_bf16_impl_list_map();
 extern const impl_list_map_t &regular_f32_f16_impl_list_map();
@@ -89,8 +86,6 @@ extern const impl_list_map_t &regular_f16_impl_list_map();
 extern const impl_list_map_t &regular_s32_impl_list_map();
 extern const impl_list_map_t &regular_s8_impl_list_map();
 extern const impl_list_map_t &regular_u8_impl_list_map();
-extern const impl_list_map_t &regular_s4_impl_list_map();
-extern const impl_list_map_t &regular_u4_impl_list_map();
 
 /* conv reorders w/ compensation */
 extern const impl_list_map_t &comp_f32_s8_impl_list_map();

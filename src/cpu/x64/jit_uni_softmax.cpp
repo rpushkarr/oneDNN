@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2024 Intel Corporation
+* Copyright 2019-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -65,8 +65,8 @@ struct jit_softmax_dense_kernel_t : jit_softmax_kernel_base_t,
     const memory_desc_wrapper src_d_, dst_d_, diff_dst_d_;
     io::jit_io_multi_dt_helper_t<Vmm> io_;
 
-    std::unique_ptr<jit_uni_eltwise_injector<isa>> exp_injector_;
-    std::unique_ptr<jit_uni_eltwise_injector<isa>> log_injector_;
+    std::unique_ptr<jit_uni_eltwise_injector_f32<isa>> exp_injector_;
+    std::unique_ptr<jit_uni_eltwise_injector_f32<isa>> log_injector_;
     std::unique_ptr<injector::jit_uni_postops_injector_t<isa>>
             postops_injector_;
 
@@ -609,7 +609,7 @@ struct jit_softmax_dense_kernel_t : jit_softmax_kernel_base_t,
                     // Prepare indices for exp aux vmms.
                     injector_utils::vmm_index_set_t exp_aux_indices;
                     const auto exp_vmm_aux_count
-                            = jit_uni_eltwise_injector<isa>::aux_vecs_count(
+                            = jit_uni_eltwise_injector_f32<isa>::aux_vecs_count(
                                     alg_kind::eltwise_exp, pd_->is_fwd(), 0.f);
                     for (size_t j = 0; j < exp_vmm_aux_count; j++) {
                         // Insert the next idx starting after `vreg_tmp_sum`.
@@ -694,14 +694,11 @@ struct jit_softmax_dense_kernel_t : jit_softmax_kernel_base_t,
                     io_[dst_d_.data_type()]->merge_interleaved_to_plain(
                             vreg_tmp_src_even, vreg_tmp_src_odd, vtmp);
                 } else {
-                    if (need_scratchpad_) {
+                    if (need_scratchpad_)
                         io_[f32]->load(
                                 interim_ptr(interim_next_vreg_stride_ * i),
                                 vreg_tmp_src_even, tail);
-                        io_[f32]->load(interim_ptr(interim_next_vreg_stride_
-                                               * (i + 1)),
-                                vreg_tmp_src_odd, tail);
-                    } else
+                    else
                         io_[dst_d_.data_type()]->load(
                                 dst_ptr(dst_next_vreg_stride_ * i),
                                 vreg_tmp_src_even, tail);
@@ -892,13 +889,13 @@ struct jit_softmax_dense_kernel_t : jit_softmax_kernel_base_t,
     // initialization.
     void generate() override {
         if (pd_->is_fwd() || is_logsoftmax_)
-            exp_injector_.reset(new jit_uni_eltwise_injector<isa>(this,
-                    alg_kind::eltwise_exp, 0.0f, 0.0f, 1.0f, data_type::f32,
-                    !use_ext_aux_vmms_, reg_exp_injector_table, injector_mask));
+            exp_injector_.reset(new jit_uni_eltwise_injector_f32<isa>(this,
+                    alg_kind::eltwise_exp, 0.0f, 0.0f, 1.0f, !use_ext_aux_vmms_,
+                    reg_exp_injector_table, injector_mask));
         if (pd_->is_fwd() && is_logsoftmax_) {
-            log_injector_.reset(new jit_uni_eltwise_injector<isa>(this,
-                    alg_kind::eltwise_log, 0.0f, 0.0f, 1.0f, data_type::f32,
-                    true, reg_log_injector_table, injector_mask));
+            log_injector_.reset(new jit_uni_eltwise_injector_f32<isa>(this,
+                    alg_kind::eltwise_log, 0.0f, 0.0f, 1.0f, true,
+                    reg_log_injector_table, injector_mask));
         }
         if (with_postops_) {
             static constexpr bool preserve_gpr = true;
@@ -937,12 +934,12 @@ struct jit_softmax_dense_kernel_t : jit_softmax_kernel_base_t,
         if (exp_injector_) exp_injector_->prepare_table();
         if (log_injector_) log_injector_->prepare_table();
         if (with_eltwise_ && postops_injector_)
-            postops_injector_->prepare_table(/* generate = */ true);
+            postops_injector_->prepare_table();
     }
 
     jit_softmax_dense_kernel_t(const softmax_pd_t *pd)
         : jit_softmax_kernel_base_t(pd)
-        , jit_generator(jit_name(), isa)
+        , jit_generator(jit_name(), nullptr, MAX_CODE_SIZE, true, isa)
         , src_d_(pd_->invariant_src_md())
         , dst_d_(pd_->dst_md())
         , diff_dst_d_(pd_->diff_dst_md())
@@ -950,8 +947,7 @@ struct jit_softmax_dense_kernel_t : jit_softmax_kernel_base_t,
         , is_f16_(utils::one_of(f16, src_d_.data_type(), dst_d_.data_type()))
         , is_avx2_ne_xf16_(mayiuse(avx2_vnni_2) && !mayiuse(avx512_core)
                   && (is_bf16_ || is_f16_))
-        // Note: must be aligned with pd_t::init()->init_scratchpad();
-        , need_scratchpad_(pd_->is_fwd() && dst_d_.data_type() != f32)
+        , need_scratchpad_(utils::one_of(dst_d_.data_type(), u8, s8))
         , use_ext_aux_vmms_(!is_logsoftmax_ && n_vregs > 16)
         , axis_simd_full_(pd_->axis_size() / simd_w_)
         , axis_simd_tail_(pd_->axis_size() % simd_w_) {
@@ -997,8 +993,8 @@ struct jit_softmax_strided_kernel_t : jit_softmax_kernel_base_t,
     const memory_desc_wrapper src_d_, dst_d_;
     io::jit_io_multi_dt_helper_t<Vmm> io_;
 
-    std::unique_ptr<jit_uni_eltwise_injector<isa>> exp_injector_;
-    std::unique_ptr<jit_uni_eltwise_injector<isa>> log_injector_;
+    std::unique_ptr<jit_uni_eltwise_injector_f32<isa>> exp_injector_;
+    std::unique_ptr<jit_uni_eltwise_injector_f32<isa>> log_injector_;
     std::unique_ptr<injector::jit_uni_postops_injector_t<isa>>
             postops_injector_;
 
@@ -1440,13 +1436,13 @@ struct jit_softmax_strided_kernel_t : jit_softmax_kernel_base_t,
 
     void generate() override {
         if (pd_->is_fwd() || is_logsoftmax_)
-            exp_injector_.reset(new jit_uni_eltwise_injector<isa>(this,
-                    alg_kind::eltwise_exp, 0.0f, 0.0f, 1.0f, data_type::f32,
-                    true, reg_exp_injector_table, injector_mask));
+            exp_injector_.reset(new jit_uni_eltwise_injector_f32<isa>(this,
+                    alg_kind::eltwise_exp, 0.0f, 0.0f, 1.0f, true,
+                    reg_exp_injector_table, injector_mask));
         if (pd_->is_fwd() && is_logsoftmax_) {
-            log_injector_.reset(new jit_uni_eltwise_injector<isa>(this,
-                    alg_kind::eltwise_log, 0.0f, 0.0f, 1.0f, data_type::f32,
-                    true, reg_log_injector_table, injector_mask));
+            log_injector_.reset(new jit_uni_eltwise_injector_f32<isa>(this,
+                    alg_kind::eltwise_log, 0.0f, 0.0f, 1.0f, true,
+                    reg_log_injector_table, injector_mask));
         }
         if (with_postops_) {
             static constexpr bool preserve_gpr = true;
@@ -1486,16 +1482,15 @@ struct jit_softmax_strided_kernel_t : jit_softmax_kernel_base_t,
         if (exp_injector_) exp_injector_->prepare_table();
         if (log_injector_) log_injector_->prepare_table();
         if (with_eltwise_ && postops_injector_)
-            postops_injector_->prepare_table(/* generate = */ true);
+            postops_injector_->prepare_table();
     }
 
     jit_softmax_strided_kernel_t(const softmax_pd_t *pd)
         : jit_softmax_kernel_base_t(pd)
-        , jit_generator(jit_name(), isa)
+        , jit_generator(jit_name(), nullptr, MAX_CODE_SIZE, true, isa)
         , src_d_(pd_->invariant_src_md())
         , dst_d_(pd_->dst_md())
-        // Note: must be aligned with pd_t::init()->init_scratchpad();
-        , need_scratchpad_(pd_->is_fwd() && dst_d_.data_type() != f32)
+        , need_scratchpad_(utils::one_of(dst_d_.data_type(), u8, s8))
         , axis_size_(pd_->axis_size())
         // `axis_stride_`, `axis_simd_full_` and `axis_simd_tail_` are only
         // different pieces from the dense version.

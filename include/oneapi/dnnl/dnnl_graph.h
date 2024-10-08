@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 *******************************************************************************/
 
 /// @file
-/// Graph C API
+/// C API
 
 #ifndef ONEAPI_DNNL_DNNL_GRAPH_H
 #define ONEAPI_DNNL_DNNL_GRAPH_H
@@ -27,9 +27,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/// @addtogroup dnnl_api
-/// @{
 
 /// @addtogroup dnnl_graph_api
 /// @{
@@ -226,16 +223,6 @@ dnnl_status_t DNNL_API dnnl_graph_tensor_set_data_handle(
 ///     otherwise.
 dnnl_status_t DNNL_API dnnl_graph_tensor_get_engine(
         const_dnnl_graph_tensor_t tensor, dnnl_engine_t *engine);
-
-/// Returns the logical tensor of a tensor object.
-///
-/// @param tensor The input tensor.
-/// @param logical_tensor Output logical tensor of the tensor object.
-/// @returns #dnnl_success on success or a status describing the error
-///     otherwise.
-dnnl_status_t DNNL_API dnnl_graph_tensor_get_logical_tensor(
-        const_dnnl_graph_tensor_t tensor,
-        dnnl_graph_logical_tensor_t *logical_tensor);
 
 /// @} dnnl_graph_api_tensor
 
@@ -741,8 +728,6 @@ dnnl_status_t DNNL_API dnnl_graph_get_constant_tensor_cache_capacity(
 /// @} dnnl_graph_api_constant_tensor_cache
 
 /// @} dnnl_graph_api
-
-/// @} dnnl_api
 
 #ifdef __cplusplus
 }

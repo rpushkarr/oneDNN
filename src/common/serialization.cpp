@@ -48,7 +48,6 @@ status_t serialize_desc(
         CASE(reorder)
         CASE(resampling)
         CASE(rnn)
-        CASE(sdpa)
         CASE(shuffle)
         CASE(softmax)
         CASE(sum)
@@ -68,9 +67,6 @@ void serialize_md(serialization_stream_t &sstream, const memory_desc_t &md) {
     sstream.write(&md.format_kind);
     // format desc
     switch ((int)md.format_kind) {
-#ifdef DNNL_EXPERIMENTAL_SPARSE
-        case format_kind::sparse:
-#endif
         case format_kind::undef:
         case format_kind::any: break;
         case format_kind::blocked:
@@ -93,11 +89,6 @@ void serialize_md(serialization_stream_t &sstream, const memory_desc_t &md) {
             sstream.write(&md.format_desc.wino_desc.oc2_block);
             sstream.write(&md.format_desc.wino_desc.adj_scale);
             sstream.write(&md.format_desc.wino_desc.size);
-            break;
-        case format_kind::cublaslt_blocked:
-            sstream.write(
-                    &md.format_desc.cublaslt_blocked_desc.cublaslt_format);
-            sstream.write(&md.format_desc.cublaslt_blocked_desc.size);
             break;
         case format_kind::rnn_packed:
             sstream.write(&md.format_desc.rnn_packed_desc.format);
@@ -193,51 +184,25 @@ void serialize_attr(
         sstream.write("scale:");
         // go through scales for all arguments
         for (const auto &p : attr.scales_.scales_) {
-            // scales: arg
             sstream.write(&p.first);
-            // scales: mask
-            sstream.write(&p.second.mask_);
-            // scales: groups
-            const int ndims = p.second.ndims_;
-            sstream.write(&ndims);
-            if (ndims > 0) sstream.write(p.second.group_dims_, ndims);
-            // scales: data type
             sstream.write(&p.second.data_type_);
+            sstream.write(&p.second.mask_);
         }
     }
     // zero_points
     if (!attr.zero_points_.has_default_values()) sstream.write("zp:");
     for (int arg : {DNNL_ARG_SRC, DNNL_ARG_WEIGHTS, DNNL_ARG_DST})
         if (!attr.zero_points_.has_default_values(arg)) {
-            const auto &zps = attr.zero_points_;
             // zero_points: arg
             sstream.write(&arg);
             int mask = 0;
             data_type_t dt = data_type::s32;
-            zps.get(arg, &mask, &dt);
-            // zero_points: mask
-            sstream.write(&mask);
-            // zero points: groups
-            const int ndims = zps.get_groups_ndims(arg);
-            sstream.write(&ndims);
-            if (ndims > 0) sstream.write(zps.get_groups(arg), ndims);
+            attr.zero_points_.get(arg, &mask, &dt);
             // zero_points: data type
             sstream.write(&dt);
+            // zero_points: mask
+            sstream.write(&mask);
         }
-
-    // Rounding modes
-    if (!attr.rounding_mode_.has_default_values()) sstream.write("rm:");
-    for (const auto &e : attr.rounding_mode_.rounding_modes_map_) {
-        if (!attr.rounding_mode_.has_default_values(e.first)) {
-            sstream.write(&e.first);
-            sstream.write(&e.second);
-        }
-    }
-
-    if (!attr.dropout_.has_default_values()) {
-        sstream.write("dropout:");
-        serialize_md(sstream, attr.dropout_.user_dropout_desc_);
-    }
 
     serialize_post_ops(sstream, attr.post_ops_);
 
@@ -329,8 +294,6 @@ void serialize_desc(
     sstream.write(desc.padding[1], DNNL_MAX_NDIMS);
     // Accumulator type
     sstream.write(&desc.accum_data_type);
-    // Internal member
-    sstream.write(&desc.use_inversion);
 }
 
 // Eltwise
@@ -607,18 +570,6 @@ void serialize_desc(serialization_stream_t &sstream, const sum_desc_t &desc) {
     // Array of mds
     for (int i = 0; i < desc.n; i++)
         serialize_md(sstream, *desc.src_mds[i]);
-}
-
-void serialize_desc(serialization_stream_t &sstream, const sdpa_desc_t &desc) {
-    // Kind
-    sstream.write(&desc.primitive_kind);
-    serialize_md(sstream, desc.q_desc);
-    serialize_md(sstream, desc.k_desc);
-    serialize_md(sstream, desc.v_desc);
-    serialize_md(sstream, desc.dst_desc);
-    serialize_md(sstream, desc.attn_mask_desc);
-    sstream.write(&desc.scale_dt);
-    sstream.write(&desc.invert_scale);
 }
 
 } // namespace serialization

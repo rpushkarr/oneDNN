@@ -40,13 +40,12 @@ struct jit_avx512_core_x8s8s32x_1x1_deconvolution_fwd_t : public primitive_t {
     struct pd_t : public cpu_deconvolution_fwd_pd_t {
         pd_t(const deconvolution_desc_t *adesc, const primitive_attr_t *attr,
                 const deconvolution_fwd_pd_t *hint_fwd_pd)
-            : cpu_deconvolution_fwd_pd_t(adesc, attr, hint_fwd_pd), jcp_() {}
+            : cpu_deconvolution_fwd_pd_t(adesc, attr, hint_fwd_pd) {}
 
         pd_t(const pd_t &other)
             : cpu_deconvolution_fwd_pd_t(other)
             , conv_pd_(other.conv_pd_->clone()) {}
 
-        pd_t() = delete;
         ~pd_t() = default;
 
         DECLARE_COMMON_PD_T(name_.c_str(),
@@ -80,34 +79,23 @@ struct jit_avx512_core_x8s8s32x_1x1_deconvolution_fwd_t : public primitive_t {
         status_t init(engine_t *engine) {
             using namespace data_type;
             using skip_mask_t = primitive_attr_t::skip_mask_t;
-            VDISPATCH_DECONVOLUTION(is_fwd(), VERBOSE_BAD_PROPKIND);
-            VDISPATCH_DECONVOLUTION(
-                    desc()->alg_kind == alg_kind::deconvolution_direct,
-                    VERBOSE_BAD_ALGORITHM);
-            VDISPATCH_DECONVOLUTION(
-                    !has_zero_dim_memory(), VERBOSE_EMPTY_TENSOR, "");
-            VDISPATCH_DECONVOLUTION(utils::one_of(src_md(0)->data_type, s8, u8),
-                    VERBOSE_UNSUPPORTED_DT);
-            VDISPATCH_DECONVOLUTION(
-                    weights_md(0)->data_type == s8, VERBOSE_UNSUPPORTED_DT);
-            VDISPATCH_DECONVOLUTION(
-                    IMPLICATION(with_bias(),
-                            utils::one_of(weights_md(1)->data_type, f32, s32,
-                                    s8, u8)),
-                    VERBOSE_UNSUPPORTED_DT);
-            VDISPATCH_DECONVOLUTION(
-                    utils::one_of(dst_md(0)->data_type, f32, s32, s8, u8),
-                    VERBOSE_UNSUPPORTED_DT);
-            VDISPATCH_DECONVOLUTION(
-                    desc()->accum_data_type == s32, VERBOSE_UNSUPPORTED_DT);
-            VDISPATCH_DECONVOLUTION(
-                    attr()->has_default_values(skip_mask_t::scales_runtime
+            bool ok = is_fwd()
+                    && desc()->alg_kind == alg_kind::deconvolution_direct
+                    && !has_zero_dim_memory()
+                    && utils::one_of(src_md(0)->data_type, s8, u8)
+                    && weights_md(0)->data_type == s8
+                    && IMPLICATION(with_bias(),
+                            utils::one_of(
+                                    weights_md(1)->data_type, f32, s32, s8, u8))
+                    && utils::one_of(dst_md(0)->data_type, f32, s32, s8, u8)
+                    && desc()->accum_data_type == s32
+                    && attr()->has_default_values(skip_mask_t::scales_runtime
                             | skip_mask_t::post_ops
-                            | skip_mask_t::zero_points_runtime),
-                    VERBOSE_UNSUPPORTED_ATTR);
-            VDISPATCH_DECONVOLUTION(
-                    zero_points_valid(attr(), true /*per_oc_bcast_accepted*/),
-                    VERBOSE_UNSUPPORTED_ZP_CFG);
+                            | skip_mask_t::zero_points_runtime)
+                    && zero_points_valid(
+                            attr(), true /*per_oc_bcast_accepted*/);
+
+            if (!ok) return status::unimplemented;
 
             CHECK(init_convolution(engine));
             CHECK(attr_.set_default_formats(dst_md(0)));
@@ -116,8 +104,6 @@ struct jit_avx512_core_x8s8s32x_1x1_deconvolution_fwd_t : public primitive_t {
 
             return status::success;
         }
-
-        jit_1x1_conv_conf_t jcp_;
 
     protected:
         status_t set_default_params() {
@@ -136,8 +122,8 @@ struct jit_avx512_core_x8s8s32x_1x1_deconvolution_fwd_t : public primitive_t {
         std::shared_ptr<primitive_desc_t> conv_pd_;
 
     private:
-        std::string name_ = JIT_IMPL_NAME_HELPER("jit_1x1_deconvolution:",
-                (jcp_.has_vnni ? avx512_core_vnni : avx512_core), "");
+        std::string name_
+                = JIT_IMPL_NAME_HELPER("jit_deconvolution:", avx512_core, "");
 
         void init_name() {
             name_.append("+");

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2024 Intel Corporation
+* Copyright 2019-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ using namespace Xbyak;
 template <cpu_isa_t isa>
 jit_uni_dw_conv_fwd_kernel_f32<isa>::jit_uni_dw_conv_fwd_kernel_f32(
         const jit_conv_conf_t &ajcp, const memory_desc_t &dst_md)
-    : jit_generator(jit_name(), isa), jcp(ajcp) {
+    : jit_generator(jit_name(), nullptr, MAX_CODE_SIZE, true, isa), jcp(ajcp) {
     if (jcp.with_eltwise || jcp.with_binary) {
         using namespace binary_injector;
         static constexpr bool preserve_gpr = true;
@@ -649,8 +649,7 @@ void jit_uni_dw_conv_fwd_kernel_f32<isa>::generate() {
 
     this->postamble();
 
-    if (jcp.with_eltwise)
-        postops_injector_->prepare_table(/* generate = */ true);
+    if (jcp.with_eltwise) postops_injector_->prepare_table();
 }
 
 template struct jit_uni_dw_conv_fwd_kernel_f32<avx512_core>;

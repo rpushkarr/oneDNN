@@ -71,16 +71,15 @@ int fill_mem(
 dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
     const prb_t *prb = init_pd_args.prb;
     res_t *res = init_pd_args.res;
-    bool force_f32_dt = init_pd_args.force_f32_dt;
 
-    auto src0_d = dnn_mem_t::init_md(prb->ndims, prb->vdims[0].data(),
-            force_f32_dt ? dnnl_f32 : prb->sdt[0], prb->stag[0]);
+    auto src0_d = dnn_mem_t::init_md(
+            prb->ndims, prb->vdims[0].data(), prb->sdt[0], prb->stag[0]);
 
-    auto src1_d = dnn_mem_t::init_md(prb->ndims, prb->vdims[1].data(),
-            force_f32_dt ? dnnl_f32 : prb->sdt[1], prb->stag[1]);
+    auto src1_d = dnn_mem_t::init_md(
+            prb->ndims, prb->vdims[1].data(), prb->sdt[1], prb->stag[1]);
 
-    auto dst_d = dnn_mem_t::init_md(prb->ndims, prb->dst_dims.data(),
-            force_f32_dt ? dnnl_f32 : prb->ddt, prb->dtag);
+    auto dst_d = dnn_mem_t::init_md(
+            prb->ndims, prb->dst_dims.data(), prb->ddt, prb->dtag);
 
     dnnl_alg_kind_t alg = attr_t::post_ops_t::kind2dnnl_kind(prb->alg);
 
@@ -109,16 +108,14 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
         bool is_bf16u8 = (dts[0] == dnnl_bf16 && dts[1] == dnnl_bf16
                 && dts[2] == dnnl_u8);
         if (is_bf16u8 && have_post_ops) {
-            res->state = SKIPPED;
-            res->reason = skip_reason::data_type_not_supported;
+            res->state = SKIPPED, res->reason = DATA_TYPE_NOT_SUPPORTED;
             return;
         }
 
         // gpu does not support s32
         for (const auto &dt : dts)
             if (dt == dnnl_s32) {
-                res->state = SKIPPED;
-                res->reason = skip_reason::data_type_not_supported;
+                res->state = SKIPPED, res->reason = DATA_TYPE_NOT_SUPPORTED;
                 return;
             }
     }
@@ -136,16 +133,14 @@ void skip_invalid_prb(const prb_t *prb, res_t *res) {
     // In case src0 is broadcasted into src1, it means that src0 has smaller
     // memory footprint and doing sum post-op or in-place will cause a crash.
     if (bcast_src0 && (prb->inplace || is_sum)) {
-        res->state = SKIPPED;
-        res->reason = skip_reason::invalid_case;
+        res->state = SKIPPED, res->reason = INVALID_CASE;
         return;
     }
 
     // See `skip_invalid_inplace` for details.
     if (prb->inplace) {
         if (is_sum) {
-            res->state = SKIPPED;
-            res->reason = skip_reason::invalid_case;
+            res->state = SKIPPED, res->reason = INVALID_CASE;
             return;
         }
 
@@ -190,8 +185,9 @@ std::vector<int> supported_exec_args(dir_t dir) {
 };
 
 int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
-        dnnl_primitive_t prim, const prb_t *prb, res_t *res,
+        dnnl_primitive_t prim, const prb_t *prb, res_t *res, dir_t dir,
         dnnl_primitive_t prim_ref) {
+    update_inplace_memory_args(mem_map, prb, dir);
     if (has_bench_mode_modifier(mode_modifier_t::no_host_memory)) return OK;
 
     const auto &ref_engine = get_cpu_engine();
@@ -270,15 +266,16 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     dnn_mem_map_t mem_map, ref_mem_map;
     init_memory_args<prb_t>(mem_map, prb, prim, supported_exec_args(prb->dir));
-    TIME_FILL(SAFE(
-            init_ref_memory_args(ref_mem_map, mem_map, prim, prb, res), WARN));
+    TIME_FILL(SAFE(init_ref_memory_args(
+                           ref_mem_map, mem_map, prim, prb, res, prb->dir),
+            WARN));
 
     args_t args(mem_map), ref_args(ref_mem_map);
 
     SAFE(execute_and_wait(prim, args, res), WARN);
 
     check_correctness(prb, {DST}, args, ref_args, setup_cmp, res);
-    SAFE(check_bitwise(prim, {DST}, args, prb->attr, prb->inplace, res), WARN);
+    SAFE(check_bitwise(prim, {DST}, args, prb->inplace, res), WARN);
 
     return measure_perf(prb->ctx_exe, res, prim, args);
 }

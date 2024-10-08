@@ -40,7 +40,9 @@ using namespace Xbyak;
 jit_avx512_core_amx_1x1_fwd_kernel_t::jit_avx512_core_amx_1x1_fwd_kernel_t(
         const jit_conv_conf_t &ajcp, const primitive_attr_t &attr,
         const memory_desc_t &dst_md)
-    : jit_generator(jit_name(), avx512_core_amx), jcp(ajcp), attr_(attr) {
+    : jit_generator(jit_name(), nullptr, MAX_CODE_SIZE, true, avx512_core_amx)
+    , jcp(ajcp)
+    , attr_(attr) {
     if (jcp.with_eltwise || jcp.with_binary || jcp.with_sum) {
         using namespace binary_injector;
         const auto &rhs_addr_reg = bin_injector_helper_reg_1;
@@ -377,7 +379,8 @@ void jit_avx512_core_amx_1x1_fwd_kernel_t::store_output_vectors_int8(
                 zmm_zero, zmm_saturation, aux_reg_saturation, f32, jcp.dst_dt);
         for (int j = 0; j < jcp.tile_width; j++) {
             const Zmm zmm_r = zmm_out(j);
-            saturate_cvt_f32(zmm_r, zmm_zero, zmm_saturation, jcp.dst_dt);
+            saturate_f32(zmm_r, zmm_zero, zmm_saturation, jcp.dst_dt);
+            vcvtps2dq(zmm_r, zmm_r);
         }
     }
 
@@ -463,7 +466,8 @@ void jit_avx512_core_amx_1x1_fwd_kernel_t::store_output_vector_int8(
     if (one_of(jcp.dst_dt, u8, s8, s32)) {
         init_saturate_f32(
                 zmm_zero, zmm_saturation, aux_reg_saturation, f32, jcp.dst_dt);
-        saturate_cvt_f32(zmm_out, zmm_zero, zmm_saturation, jcp.dst_dt);
+        saturate_f32(zmm_out, zmm_zero, zmm_saturation, jcp.dst_dt);
+        vcvtps2dq(zmm_out, zmm_out);
     }
 
     const Zmm zmm_out_store = zmm_mask(zmm_out, mask_flag, true);
@@ -889,8 +893,7 @@ void jit_avx512_core_amx_1x1_fwd_kernel_t::generate() {
     L(label_done);
     postamble();
 
-    if (jcp.with_eltwise)
-        postops_injector_->prepare_table(/* generate = */ true);
+    if (jcp.with_eltwise) postops_injector_->prepare_table();
 }
 
 void jit_avx512_core_amx_1x1_fwd_kernel_t::tile_configure(char *tcfg_buff) {

@@ -316,77 +316,6 @@ attr_t::fpmath_mode_t parse_attr_fpmath_mode_func(const std::string &s) {
     return v;
 }
 
-attr_t::rounding_mode_t parse_attr_rounding_mode_func(const std::string &s) {
-    attr_t::rounding_mode_t rm;
-
-    if (s.empty()) return rm;
-
-    size_t start_pos = 0;
-    while (start_pos != std::string::npos) {
-        auto subs = parser::get_substr(s, start_pos, '+');
-        size_t subs_pos = 0;
-
-        auto arg = str2arg(parser::get_substr(subs, subs_pos, ':'));
-        if (arg == DNNL_ARG_UNDEF) {
-            BENCHDNN_PRINT(0, "%s\n", "Error: undefined argument index");
-            SAFE_V(FAIL);
-        }
-        if (subs_pos != std::string::npos)
-            rm.set(arg,
-                    str2rounding_mode(parser::get_substr(subs, subs_pos, ':')));
-        if (subs_pos != std::string::npos)
-            rm.set_seed(stoll_safe(get_substr(subs, subs_pos, ':')));
-    }
-    return rm;
-}
-
-attr_t::dropout_t parse_attr_dropout_func(const std::string &s) {
-    const char *err = "Error: dangling symbol at the end of input";
-    attr_t::dropout_t v;
-    if (s.empty()) return v;
-
-    size_t start_pos = 0;
-    auto subs = get_substr(s, start_pos, ':');
-    v.p = stof_safe(subs);
-    if ((v.p < 0.f) || (v.p > 1.f)) {
-        BENCHDNN_PRINT(0, "Error: bad dropout probability value: %f\n", v.p);
-        SAFE_V(FAIL);
-    }
-    if (start_pos == std::string::npos) return v;
-    if (start_pos >= s.size()) {
-        BENCHDNN_PRINT(0, "%s \'%s\'\n", err, s.c_str());
-        SAFE_V(FAIL);
-    }
-
-    if (start_pos != std::string::npos) {
-        subs = get_substr(s, start_pos, ':');
-        v.seed = stoll_safe(subs);
-
-        if (start_pos == std::string::npos) return v;
-        if (start_pos >= s.size()) {
-            BENCHDNN_PRINT(0, "%s \'%s\'\n", err, s.c_str());
-            SAFE_V(FAIL);
-        }
-
-        if (start_pos != std::string::npos) {
-            v.tag = get_substr(s, start_pos, '\0');
-
-            if (check_tag(v.tag) != OK) {
-                BENCHDNN_PRINT(0, "%s \'%s\' %s\n", "Error: dropout mask tag",
-                        v.tag.c_str(), "is not recognized.");
-                SAFE_V(FAIL);
-            }
-
-            if (start_pos != std::string::npos) {
-                BENCHDNN_PRINT(0, "%s \'%s\'\n", err, s.c_str());
-                SAFE_V(FAIL);
-            }
-        }
-    }
-
-    return v;
-}
-
 } // namespace parser_utils
 
 // vector types
@@ -507,7 +436,7 @@ bool parse_mb(std::vector<int64_t> &mb, const std::vector<int64_t> &def_mb,
 }
 
 bool parse_attr_post_ops(std::vector<attr_t::post_ops_t> &po, const char *str,
-        const std::string &option_name = "attr-post-ops") {
+        const std::string &option_name /* = "attr-post-ops"*/) {
     static const std::string help
             = "POST-OPS\n    Specifies post-ops attribute. `POST-OPS` syntax "
               "is one of those:\n    * SUM[:SCALE[:ZERO_POINT[:DATA_TYPE]]]\n  "
@@ -521,7 +450,7 @@ bool parse_attr_post_ops(std::vector<attr_t::post_ops_t> &po, const char *str,
 }
 
 bool parse_attr_scales(std::vector<attr_t::arg_scales_t> &scales,
-        const char *str, const std::string &option_name = "attr-scales") {
+        const char *str, const std::string &option_name /* = "attr-scales"*/) {
     static const std::string help
             = "ARG:POLICY[:SCALE][+...]\n    Specifies input scales "
               "attribute.\n    More details at "
@@ -531,7 +460,8 @@ bool parse_attr_scales(std::vector<attr_t::arg_scales_t> &scales,
 }
 
 bool parse_attr_zero_points(std::vector<attr_t::zero_points_t> &zp,
-        const char *str, const std::string &option_name = "attr-zero-points") {
+        const char *str,
+        const std::string &option_name /* = "attr-zero-points"*/) {
     static const std::string help
             = "ARG:POLICY[:ZEROPOINT][+...]\n    Specifies zero-points "
               "attribute.\n    More details at "
@@ -540,24 +470,11 @@ bool parse_attr_zero_points(std::vector<attr_t::zero_points_t> &zp,
     return parse_subattr(zp, str, option_name, help);
 }
 
-bool parse_attr_rounding_mode(std::vector<attr_t::rounding_mode_t> &rm,
-        const char *str,
-        const std::string &option_name = "attr-rounding-mode") {
-    static const std::string help
-            = "ARG:MODE[:SEED][+...]    (Default: `environment`)\n    "
-              "Specifies a "
-              "rounding mode MODE to be applied upon conversion of argument "
-              "ARG.\n    More details at "
-            + doc_url + "knobs_attr.md\n";
-    return parse_vector_option(rm, {},
-            parser_utils::parse_attr_rounding_mode_func, str, option_name,
-            help);
-}
-
 bool parse_attr_scratchpad_mode(
         std::vector<dnnl_scratchpad_mode_t> &scratchpad_mode,
         const std::vector<dnnl_scratchpad_mode_t> &def_scratchpad_mode,
-        const char *str, const std::string &option_name = "attr-scratchpad") {
+        const char *str,
+        const std::string &option_name /* = "attr-scratchpad"*/) {
     static const std::string help
             = "MODE    (Default: `library`)\n    Specifies scratchpad "
               "attribute. `MODE` values can be `library` or `user`.\n    More "
@@ -569,7 +486,7 @@ bool parse_attr_scratchpad_mode(
 
 bool parse_attr_fpmath_mode(std::vector<attr_t::fpmath_mode_t> &fpmath_mode,
         const std::vector<attr_t::fpmath_mode_t> &def_fpmath_mode,
-        const char *str, const std::string &option_name = "attr-fpmath") {
+        const char *str, const std::string &option_name /* = "attr-fpmath"*/) {
     static const std::string help
             = "MODE[:APPLY_TO_INT]    (Default: `strict[:false]`)\n    "
               "Specifies "
@@ -579,20 +496,10 @@ bool parse_attr_fpmath_mode(std::vector<attr_t::fpmath_mode_t> &fpmath_mode,
             parser_utils::parse_attr_fpmath_mode_func, str, option_name, help);
 }
 
-bool parse_attr_dropout(std::vector<attr_t::dropout_t> &dropout,
-        const std::vector<attr_t::dropout_t> &def_dropout, const char *str,
-        const std::string &option_name = "attr-dropout") {
-    static const std::string help
-            = "PROBABILITY[:SEED[:TAG]]\n    Specifies dropout attribute.\n    "
-              "More details at "
-            + doc_url + "knobs_attr.md\n";
-    return parse_vector_option(dropout, def_dropout,
-            parser_utils::parse_attr_dropout_func, str, option_name, help);
-}
-
 bool parse_attr_acc_mode(std::vector<dnnl_accumulation_mode_t> &acc_mode,
         const std::vector<dnnl_accumulation_mode_t> &def_acc_mode,
-        const char *str, const std::string &option_name = "attr-acc-mode") {
+        const char *str,
+        const std::string &option_name /* = "attr-acc-mode"*/) {
     static const std::string help
             = "MODE    (Default: `strict`)\n    Specifies accumulation mode "
               "attribute. `MODE` values can be `strict`, `relaxed`, `any`,"
@@ -605,28 +512,13 @@ bool parse_attr_deterministic(
         std::vector<attr_t::deterministic_t> &deterministic,
         const std::vector<attr_t::deterministic_t> &def_deterministic,
         const char *str,
-        const std::string &option_name = "attr-deterministic") {
+        const std::string &option_name /* = "attr-deterministic"*/) {
     static const std::string help
             = "MODE    (Default: `false`)\n    Specifies deterministic mode "
               "attribute. `MODE` values can be `true`, or `false`.\n";
     return parse_vector_option(deterministic, def_deterministic,
             parser_utils::parse_attr_deterministic_func, str, option_name,
             help);
-}
-
-bool parse_attributes(
-        base_settings_t &s, const base_settings_t &def, const char *str) {
-    const bool parsed_attrs = parse_attr_scales(s.scales, str)
-            || parse_attr_zero_points(s.zero_points, str)
-            || parse_attr_post_ops(s.post_ops, str)
-            || parse_attr_dropout(s.dropout, def.dropout, str)
-            || parse_attr_scratchpad_mode(
-                    s.scratchpad_mode, def.scratchpad_mode, str)
-            || parse_attr_fpmath_mode(s.fpmath_mode, def.fpmath_mode, str)
-            || parse_attr_acc_mode(s.acc_mode, def.acc_mode, str)
-            || parse_attr_deterministic(s.deterministic, def.deterministic, str)
-            || parse_attr_rounding_mode(s.rounding_mode, str);
-    return parsed_attrs;
 }
 
 bool parse_axis(std::vector<int> &axis, const std::vector<int> &def_axis,
@@ -857,17 +749,6 @@ static bool parse_canonical(
               "default ones.\n";
     return parse_single_value_option(
             canonical, false, str2bool, str, option_name, help);
-}
-
-static bool parse_check_ref_impl(
-        const char *str, const std::string &option_name = "check-ref-impl") {
-    static const std::string help
-            = "BOOL    (Default: `false`)\n    Instructs the driver to compare "
-              "an implementation name against the \'ref\' string pattern.\n    "
-              "When set to `true`, the check would return an error if the "
-              "implementation name contains such pattern.\n";
-    return parse_single_value_option(
-            check_ref_impl, false, str2bool, str, option_name, help);
 }
 
 static bool parse_cold_cache(
@@ -1344,12 +1225,12 @@ bool parse_bench_settings(const char *str) {
 
     bool parsed = parse_allow_enum_tags_only(str)
             || parse_attr_same_pd_check(str) || parse_canonical(str)
-            || parse_check_ref_impl(str) || parse_cold_cache(str)
-            || parse_cpu_isa_hints(str) || parse_engine(str)
-            || parse_fast_ref(str) || parse_fast_ref_gpu(str)
-            || parse_fix_times_per_prb(str) || parse_max_ms_per_prb(str)
-            || parse_num_streams(str) || parse_repeats_per_prb(str)
-            || parse_mem_check(str) || parse_memory_kind(str) || parse_mode(str)
+            || parse_cold_cache(str) || parse_cpu_isa_hints(str)
+            || parse_engine(str) || parse_fast_ref(str)
+            || parse_fast_ref_gpu(str) || parse_fix_times_per_prb(str)
+            || parse_max_ms_per_prb(str) || parse_num_streams(str)
+            || parse_repeats_per_prb(str) || parse_mem_check(str)
+            || parse_memory_kind(str) || parse_mode(str)
             || parse_mode_modifier(str) || parse_skip_impl(str)
             || parse_start(str) || parse_stream_kind(str) || parse_verbose(str);
 

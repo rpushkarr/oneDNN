@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2024 Intel Corporation
+* Copyright 2017-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -41,7 +41,9 @@ using namespace Xbyak;
 jit_sse41_conv_fwd_kernel_f32::jit_sse41_conv_fwd_kernel_f32(
         const jit_conv_conf_t &ajcp, const primitive_attr_t &attr,
         const memory_desc_t &dst_md)
-    : jit_generator(jit_name(), sse41), jcp(ajcp), attr_(attr) {
+    : jit_generator(jit_name(), nullptr, MAX_CODE_SIZE, sse41)
+    , jcp(ajcp)
+    , attr_(attr) {
     if (jcp.with_eltwise || jcp.with_binary) {
         static constexpr bool preserve_gpr = true;
         static constexpr bool preserve_vmm = false;
@@ -375,8 +377,7 @@ void jit_sse41_conv_fwd_kernel_f32::generate() {
 
     this->postamble();
 
-    if (jcp.with_eltwise)
-        postops_injector_->prepare_table(/* generate = */ true);
+    if (jcp.with_eltwise) postops_injector_->prepare_table();
 }
 
 status_t jit_sse41_conv_fwd_kernel_f32::init_conf(jit_conv_conf_t &jcp,
@@ -426,8 +427,8 @@ status_t jit_sse41_conv_fwd_kernel_f32::init_conf(jit_conv_conf_t &jcp,
     bool kernel_outside_src = false || ext_kw <= jcp.l_pad
             || ext_kw <= jcp.r_pad || ext_kh <= jcp.t_pad
             || ext_kh <= jcp.b_pad;
-    VDISPATCH_CONV_IC(!kernel_outside_src, VERBOSE_UNSUPPORTED_PAD_FEATURE,
-            "weights and src size mismatch");
+    VDISPATCH_CONV_IC(!kernel_outside_src,
+            "weights and src size mismatch due to padding");
 
     const auto dat_tag_nxc = (ndims == 3 ? nwc : nhwc);
     const auto dat_tag_ncx = (ndims == 3 ? ncw : nchw);
@@ -488,8 +489,8 @@ status_t jit_sse41_conv_fwd_kernel_f32::init_conf(jit_conv_conf_t &jcp,
 
     const bool channel_pad_ok = true && jcp.ic <= src_d.padded_dims()[1]
             && jcp.oc <= dst_d.padded_dims()[1];
-    VDISPATCH_CONV_IC(channel_pad_ok, VERBOSE_UNSUPPORTED_PAD_FEATURE,
-            "i/o and padded channel size mismatch");
+    VDISPATCH_CONV_IC(channel_pad_ok,
+            "i/o channel size mismatch against padded channel dimension");
 
     const int simd_w = 8; // 2 SSE vectors processing at once
 
@@ -506,7 +507,7 @@ status_t jit_sse41_conv_fwd_kernel_f32::init_conf(jit_conv_conf_t &jcp,
                     (jcp.t_pad == 0 && jcp.l_pad == 0)
                             || (jcp.stride_w == 1 && jcp.stride_h == 1))
             && IMPLICATION(mimo, jcp.ic % simd_w == 0);
-    VDISPATCH_CONV_IC(args_ok, VERBOSE_BLOCKING_FAIL, "bad parameters");
+    VDISPATCH_CONV_IC(args_ok, VERBOSE_BLOCKING_FAIL);
 
     int r_pad_no_tail = nstl::max(0,
             calculate_end_padding(jcp.l_pad, jcp.ow - jcp.ur_w_tail, jcp.iw,
@@ -526,7 +527,6 @@ status_t jit_sse41_conv_fwd_kernel_f32::init_conf(jit_conv_conf_t &jcp,
                         jcp.stride_w, ext_kw));
 
         VDISPATCH_CONV_IC(jcp.ur_w >= nstl::max(jcp.l_pad, r_pad_no_tail),
-                VERBOSE_UNSUPPORTED_PAD_FEATURE,
                 "width unroll exceeds padding size");
     }
     assert(jcp.nb_oc_blocking > 0);

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2024 Intel Corporation
+* Copyright 2021-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -29,7 +29,6 @@
 
 #include "oneapi/dnnl/dnnl.hpp"
 
-using dnnl::impl::cache_state_t;
 namespace utils = dnnl::graph::tests::unit::utils;
 
 namespace dnnl {
@@ -48,7 +47,7 @@ TEST(test_interface_compiled_partition_cache, SingleOpCase) {
 #else
     const size_t max_batch = 4;
     impl::engine_t *eng = get_engine();
-    std::vector<impl::graph::op_kind_t> kind_set {
+    std::vector<impl::graph::op_kind_t> kind_set {impl::graph::op_kind::ReLU,
             impl::graph::op_kind::ReLU, impl::graph::op_kind::Tanh};
     const size_t num_eltwise_kind = kind_set.size();
     // Flush the cache
@@ -62,16 +61,15 @@ TEST(test_interface_compiled_partition_cache, SingleOpCase) {
         for (size_t op_i = 0; op_i < kind_set.size(); ++op_i) {
             impl::graph::op_kind_t kind = kind_set[op_i];
             impl::graph::logical_tensor_t input = utils::logical_tensor_init(0,
-                    {(int64_t)(batch * (op_i + 1) + 1), 1, 1, 1},
+                    {(int64_t)(batch * op_i + 1), 1, 1, 1},
                     impl::graph::data_type::f32,
                     impl::graph::layout_type::strided);
             impl::graph::logical_tensor_t output = utils::logical_tensor_init(1,
-                    {(int64_t)(batch * (op_i + 1) + 1), 1, 1, 1},
+                    {(int64_t)(batch * op_i + 1), 1, 1, 1},
                     impl::graph::data_type::f32,
                     impl::graph::layout_type::strided);
-            // Create op, op_i may be 0, so for different batch sizes, use
-            // batch * (op_i + 1) to create a op with unique id.
-            impl::graph::op_t elt {batch * (op_i + 1), kind, "elt"};
+            // Create op
+            impl::graph::op_t elt {batch * op_i, kind, "elt"};
             elt.add_input(input);
             elt.add_output(output);
             // Create graph
@@ -94,8 +92,8 @@ TEST(test_interface_compiled_partition_cache, SingleOpCase) {
             // highly possibly cache_miss
             tasks.emplace_back([eng, par, input, output]() {
                 impl::graph::compiled_partition_t cp(par);
-                std::pair<impl::graph::compiled_partition_t *, cache_state_t>
-                        cpcache {&cp, cache_state_t::miss};
+                std::pair<impl::graph::compiled_partition_t *, bool> cpcache {
+                        &cp, false};
                 std::vector<const impl::graph::logical_tensor_t *> inputs {
                         &input};
                 std::vector<const impl::graph::logical_tensor_t *> outputs {
@@ -106,8 +104,8 @@ TEST(test_interface_compiled_partition_cache, SingleOpCase) {
             // highly possibly cache_hit
             tasks.emplace_back([eng, par, input, output]() {
                 impl::graph::compiled_partition_t cp(par);
-                std::pair<impl::graph::compiled_partition_t *, cache_state_t>
-                        cpcache {&cp, cache_state_t::miss};
+                std::pair<impl::graph::compiled_partition_t *, bool> cpcache {
+                        &cp, false};
                 std::vector<const impl::graph::logical_tensor_t *> inputs {
                         &input};
                 std::vector<const impl::graph::logical_tensor_t *> outputs {
@@ -174,15 +172,15 @@ TEST(test_interface_lru_compiled_partition_cache, Method) {
     g.get_ordered_partitions(parts);
 
     graph::compiled_partition_t cp(par);
-    std::pair<graph::compiled_partition_t *, cache_state_t> cpcache {
-            &cp, cache_state_t::miss};
+    std::pair<graph::compiled_partition_t *, bool> cpcache {&cp, false};
     std::vector<const graph::logical_tensor_t *> inputs {&input};
     std::vector<const graph::logical_tensor_t *> outputs {&output};
     // Partition compilation
     par.compile(cpcache, inputs, outputs, &eng);
 
 #ifndef DNNL_GRAPH_DISABLE_COMPILED_PARTITION_CACHE
-    graph::partition_hashing::key_t key {&eng, {elt}, inputs, outputs};
+    graph::partition_hashing::key_t key {
+            par.id(), &eng, {elt}, inputs, outputs};
     auto &cache_mapper = graph::compiled_partition_cache();
     ASSERT_NO_THROW(cache_mapper.get_partition(key));
 

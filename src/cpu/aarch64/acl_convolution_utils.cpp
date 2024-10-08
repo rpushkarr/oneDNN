@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Arm Ltd. and affiliates
+* Copyright 2020-2023 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,10 +14,9 @@
 * limitations under the License.
 *******************************************************************************/
 
-#include "acl_convolution_utils.hpp"
-#include "common/convolution_pd.hpp"
+#include "cpu/aarch64/acl_convolution_utils.hpp"
 #include "common/utils.hpp"
-#include "oneapi/dnnl/dnnl.h"
+#include "oneapi/dnnl/dnnl.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -63,10 +62,9 @@ status_t acl_init_conf(acl_conv_conf_t &acp, memory_desc_t &src_md,
                               everyone_is(data_type::f32, src_d.data_type(),
                                       wei_d.data_type(), dst_d.data_type()),
                               everyone_is(data_type::f16, src_d.data_type(),
-                                      wei_d.data_type(), dst_d.data_type()),
-                              everyone_is(data_type::bf16, src_d.data_type(),
                                       wei_d.data_type(), dst_d.data_type())),
-            " src, dst and wei must be fp16, bf16 or fp32");
+            " src, dst and wei must be fp16 or fp32");
+
     // batch size
     const int mb = src_d.dims()[0];
 
@@ -108,6 +106,10 @@ status_t acl_init_conf(acl_conv_conf_t &acp, memory_desc_t &src_md,
     // On the other hand l(t)_pad are guaranteed to be non-negative.
     const int r_pad = std::max(static_cast<int>(cd.padding[1][1]), 0);
     const int b_pad = std::max(static_cast<int>(cd.padding[1][0]), 0);
+
+    if (is_depthwise
+            && (t_pad >= kh || b_pad >= kh || l_pad >= kw || r_pad >= kw))
+        return status::unimplemented;
 
     acp.padstride_info = arm_compute::PadStrideInfo(stride_w, stride_h,
             static_cast<unsigned int>(l_pad), static_cast<unsigned int>(r_pad),
@@ -283,6 +285,139 @@ status_t acl_init_conf(acl_conv_conf_t &acp, memory_desc_t &src_md,
 
     return status::success;
 }
+
+status_t init_conf_gemm(acl_conv_conf_t &acp, memory_desc_t &src_md,
+        memory_desc_t &weights_md, memory_desc_t &dst_md,
+        memory_desc_t &bias_md, const convolution_desc_t &cd,
+        const primitive_attr_t &attr) {
+    if (weights_md.ndims != 4) return status::unimplemented;
+
+    // General Compute Library checks, memory tags are also set there
+    CHECK(acl_init_conf(acp, src_md, weights_md, dst_md, bias_md, cd, attr));
+
+    // clang-format off
+    // Validate convolution manually to check for return status
+    ACL_CHECK_VALID(arm_compute::NEGEMMConvolutionLayer::validate(
+        &acp.src_tensor_info,
+        &acp.wei_tensor_info,
+        acp.with_bias ? &acp.bia_tensor_info : nullptr,
+        &acp.dst_tensor_info,
+        acp.padstride_info,
+        acp.weights_info,
+        acp.dilation_info,
+        acp.act_info,
+        acp.fast_math));
+    // clang-format on
+
+    return status::success;
+}
+
+status_t init_conf_indirect_gemm(acl_conv_conf_t &acp, memory_desc_t &src_md,
+        memory_desc_t &weights_md, memory_desc_t &dst_md,
+        memory_desc_t &bias_md, const convolution_desc_t &cd,
+        const primitive_attr_t &attr) {
+    if (weights_md.ndims != 4) return status::unimplemented;
+
+    // Indirect is slower for small convolution kernels
+    if (weights_md.dims[2] == 1 && weights_md.dims[3] == 1)
+        return status::unimplemented;
+
+    CHECK(acl_init_conf(acp, src_md, weights_md, dst_md, bias_md, cd, attr));
+
+    // Indirect is slower than gemm for low thread counts, except for fast math
+    if (dnnl_get_max_threads() < 28 && !acp.fast_math)
+        return status::unimplemented;
+
+    // If we do not need to pad input channels for fast math mode then it would
+    // be faster to run convolution with im2row instead of using indirect kernel
+    int block_by = arm_compute::block_by(acp.weights_info.weight_format());
+    int ic = src_md.dims[1];
+    if (acp.fast_math && ic % block_by == 0) return status::unimplemented;
+
+    // clang-format off
+    // NOTE: indirect convolution method supports only nhwc layout.
+    ACL_CHECK_VALID(arm_compute::NEGEMMConv2d::validate(
+        &acp.src_tensor_info,
+        &acp.wei_tensor_info,
+        acp.with_bias ? &acp.bia_tensor_info : nullptr,
+        &acp.dst_tensor_info,
+        arm_compute::Conv2dInfo(acp.padstride_info,
+                                acp.dilation_info,
+                                acp.act_info,
+                                acp.fast_math,
+                                1, acp.weights_info)));
+    // clang-format on
+
+    return status::success;
+}
+
+status_t init_conf_wino(acl_conv_conf_t &acp, memory_desc_t &src_md,
+        memory_desc_t &weights_md, memory_desc_t &dst_md,
+        memory_desc_t &bias_md, const convolution_desc_t &cd,
+        const primitive_attr_t &attr) {
+
+    // Under these conditions, fallback to faster GEMM-based convolution
+    // unless the user explicitly specifies Winograd algorithm
+    // clang-format off
+    if (one_of(true, src_md.dims[2] > 112, // ih
+                src_md.dims[3] > 112, // iw
+                src_md.dims[1] < 64, // ic
+                dst_md.dims[1] < 64, // oc
+                dnnl_get_max_threads() > 28)
+            && cd.alg_kind == alg_kind::convolution_auto) {
+        return status::unimplemented;
+    }
+    // clang-format on
+
+    // General Compute Library checks, memory tags are also set there
+    acp.alg_winograd = true;
+    CHECK(acl_init_conf(acp, src_md, weights_md, dst_md, bias_md, cd, attr));
+
+    const bool shape_ok
+            // only unit strides allowed
+            = (acp.padstride_info.stride() == std::pair<uint, uint> {1, 1})
+            // Note: Compute Library supports arbitrary padding for wino kernels
+            // but we only allow small padding to be consistent with oneDNN
+            && (acp.padstride_info.pad().first <= 1) // padding left/right
+            && (acp.padstride_info.pad().second <= 1) // padding top/bottom
+            // only non-dilated convolutions allowed
+            && (acp.dilation_info == arm_compute::Size2D(1, 1));
+
+    ACL_CHECK_SUPPORT(!shape_ok, "shape not supported by winograd kernels");
+
+    // clang-format off
+    // Validate convolution manually to check for return status
+    ACL_CHECK_VALID(arm_compute::NEWinogradConvolutionLayer::validate(
+        &acp.src_tensor_info,
+        &acp.wei_tensor_info,
+        acp.with_bias ? &acp.bia_tensor_info : nullptr,
+        &acp.dst_tensor_info,
+        acp.padstride_info,
+        acp.act_info,
+        true)); // enable_fast_math flag in ACL Winograd
+    // clang-format on
+
+    return status::success;
+}
+
+status_t init_conf_depthwise(acl_conv_conf_t &acp, memory_desc_t &src_md,
+        memory_desc_t &weights_md, memory_desc_t &dst_md,
+        memory_desc_t &bias_md, const convolution_desc_t &cd,
+        const primitive_attr_t &attr) {
+    if (weights_md.ndims != 5) return status::unimplemented;
+
+    CHECK(acl_init_conf(acp, src_md, weights_md, dst_md, bias_md, cd, attr));
+
+    ACL_CHECK_VALID(arm_compute::NEDepthwiseConvolutionLayer::validate(
+            &acp.src_tensor_info, &acp.wei_tensor_info,
+            acp.with_bias ? &acp.bia_tensor_info : nullptr,
+            &acp.dst_tensor_info, acp.padstride_info,
+            1, // depth multiplier default value
+            acp.act_info, acp.dilation_info));
+
+    return status::success;
+}
+
 } // namespace acl_convolution_utils
 
 } // namespace aarch64

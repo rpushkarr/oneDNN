@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2024 Intel Corporation
+* Copyright 2017-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #include <math.h>
 
 #include "common/dnnl_thread.hpp"
-#include "common/math_utils.hpp"
 #include "common/utils.hpp"
 
 #include "cpu/x64/injectors/jit_uni_postops_injector.hpp"
@@ -232,7 +231,7 @@ struct jit_uni_i8i8_pooling_fwd_ker_t : public jit_generator {
 
     jit_uni_i8i8_pooling_fwd_ker_t(
             const jit_pool_conf_t &jpp_, const memory_desc_t *dst_md)
-        : jit_generator(jit_name(), isa)
+        : jit_generator(jit_name(), nullptr, MAX_CODE_SIZE, true, isa)
         , jpp(jpp_)
         , postops_injector_(nullptr) {
 
@@ -1262,7 +1261,7 @@ void jit_uni_i8i8_pooling_fwd_ker_t<isa>::generate() {
     postamble();
 
     if (jpp.with_eltwise && postops_injector_)
-        postops_injector_->prepare_table(/* generate = */ true);
+        postops_injector_->prepare_table();
 }
 
 template <cpu_isa_t isa>
@@ -1307,11 +1306,10 @@ status_t jit_uni_i8i8_pooling_fwd_ker_t<isa>::init_conf(
     int right_pad = calculate_end_padding(
             jpp.l_pad, jpp.ow, jpp.iw, jpp.stride_w, jpp.kw);
 
-    VDISPATCH_POOLING_IC(
-            !(jpp.f_pad >= jpp.kd || jpp.t_pad >= jpp.kh || jpp.l_pad >= jpp.kw
-                    || back_pad >= jpp.kd || bottom_pad >= jpp.kh
-                    || right_pad >= jpp.kw),
-            VERBOSE_UNSUPPORTED_PAD_FEATURE, "");
+    if (jpp.f_pad >= jpp.kd || jpp.t_pad >= jpp.kh || jpp.l_pad >= jpp.kw
+            || back_pad >= jpp.kd || bottom_pad >= jpp.kh
+            || right_pad >= jpp.kw)
+        return status::unimplemented;
 
     jpp.alg = pd.alg_kind;
 
@@ -1332,7 +1330,7 @@ status_t jit_uni_i8i8_pooling_fwd_ker_t<isa>::init_conf(
                             * nstl::min(jpp.ih, jpp.oh)
                             * nstl::min(jpp.iw, jpp.ow)
                     >= simd_w);
-    VDISPATCH_POOLING_IC(safe_load_n_store, "safe load-and-store not possible");
+    if (!safe_load_n_store) return status::unimplemented;
 
     jpp.c_block = simd_w;
     jpp.c_tail = jpp.c % jpp.c_block;
@@ -1371,8 +1369,7 @@ status_t jit_uni_i8i8_pooling_fwd_ker_t<isa>::init_conf(
         default: return status::unimplemented;
     }
 
-    VDISPATCH_POOLING_IC(
-            post_ops_ok(jpp, *ppd->attr(), dst_d), VERBOSE_UNSUPPORTED_POSTOP);
+    if (!post_ops_ok(jpp, *ppd->attr(), dst_d)) return status::unimplemented;
 
     return status::success;
 }
@@ -1391,8 +1388,7 @@ bool jit_uni_i8i8_pooling_fwd_ker_t<isa>::post_ops_ok(jit_pool_conf_t &jpp,
     for (const auto &entry : entries) {
         if (entry.is_eltwise()) {
             const auto alg = entry.eltwise.alg;
-            jpp.with_eltwise
-                    = eltwise_injector::is_supported(isa, alg, data_type::f32);
+            jpp.with_eltwise = eltwise_injector::is_supported(isa, alg);
         } else if (entry.is_binary()) {
             if (isa != avx512_core
                     && entry.binary.src1_desc.data_type == data_type::bf16)

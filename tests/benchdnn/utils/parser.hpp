@@ -30,7 +30,6 @@
 #include "dnnl_debug.hpp"
 #include "tests/test_thread.hpp"
 #include "utils/dims.hpp"
-#include "utils/settings.hpp"
 
 namespace parser {
 
@@ -166,12 +165,7 @@ bool parse_subattr(std::vector<T> &vec, const char *str,
     std::vector<T> def {T()};
     auto parse_subattr_func = [](const std::string &s) {
         T v;
-        auto st = v.from_str(s);
-        if (st != OK) {
-            BENCHDNN_PRINT(
-                    0, "Error: failed to parse input: \'%s\'\n", s.c_str());
-            SAFE_V(FAIL);
-        }
+        SAFE_V(v.from_str(s));
         return v;
     };
     return parse_vector_option(
@@ -222,11 +216,32 @@ bool parse_multi_tag(std::vector<std::vector<std::string>> &tag,
 bool parse_mb(std::vector<int64_t> &mb, const std::vector<int64_t> &def_mb,
         const char *str, const std::string &option_name = "mb");
 
-// This is a parsing method for all attributes. It doesn't take the option name
-// unlike other methods. It calls every possible parse call to a dedicated
-// attribute and checks if current parse token belongs to any of those.
-bool parse_attributes(base_settings_t &settings,
-        const base_settings_t &def_settings, const char *str);
+bool parse_attr_post_ops(std::vector<attr_t::post_ops_t> &po, const char *str,
+        const std::string &option_name = "attr-post-ops");
+
+bool parse_attr_scales(std::vector<attr_t::arg_scales_t> &scales,
+        const char *str, const std::string &option_name = "attr-scales");
+
+bool parse_attr_zero_points(std::vector<attr_t::zero_points_t> &zp,
+        const char *str, const std::string &option_name = "attr-zero-points");
+
+bool parse_attr_scratchpad_mode(
+        std::vector<dnnl_scratchpad_mode_t> &scratchpad_mode,
+        const std::vector<dnnl_scratchpad_mode_t> &def_scratchpad_mode,
+        const char *str, const std::string &option_name = "attr-scratchpad");
+
+bool parse_attr_fpmath_mode(std::vector<attr_t::fpmath_mode_t> &fpmath_mode,
+        const std::vector<attr_t::fpmath_mode_t> &def_fpmath_mode,
+        const char *str, const std::string &option_name = "attr-fpmath");
+
+bool parse_attr_acc_mode(std::vector<dnnl_accumulation_mode_t> &acc_mode,
+        const std::vector<dnnl_accumulation_mode_t> &def_acc_mode,
+        const char *str, const std::string &option_name = "attr-acc-mode");
+
+bool parse_attr_deterministic(
+        std::vector<attr_t::deterministic_t> &deterministic,
+        const std::vector<attr_t::deterministic_t> &def_deterministic,
+        const char *str, const std::string &option_name = "attr-deterministic");
 
 bool parse_ctx_init(std::vector<thr_ctx_t> &ctx,
         const std::vector<thr_ctx_t> &def_ctx, const char *str);

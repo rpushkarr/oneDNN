@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2024 Intel Corporation
+* Copyright 2016-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -101,7 +101,6 @@ protected:
 
     void SetUp() override {
         auto data_type = data_traits<data_t>::data_type;
-        SKIP_IF_HIP(true, "Concat operator is not supported");
         SKIP_IF(unsupported_data_type(data_type),
                 "Engine does not support this data type.");
         concat_test_params_t p

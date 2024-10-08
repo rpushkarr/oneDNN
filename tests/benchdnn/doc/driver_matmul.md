@@ -17,10 +17,27 @@ where *matmul-knobs* are:
             Refer to [tags](knobs_tag.md) for details.
  - `--dtag={ab [default], any, ...}` -- memory format of the destination memory.
             Refer to [tags](knobs_tag.md) for details.
- - `--strides=SRC_STRIDES:WEI_STRIDES:DST_STRIDES` -- physical memory layout
-            specification for `src`, `weights`, and `dst` tensors through
-            strides values. Refer to [option documentation](knob_strides.md)
+ - `--strides=S0xS1x..xS_mxS_k:W_0xW_1x..xW_kxW_n:D_0xD_1x..xD_mxD_n` -- direct
+            stride specification for `src`, `weights`, and `dst` tensors that
+            can be specified as an alternative to memory formats. The syntax
+            matches with problem descriptor where `x` is the delimiter for
+            dimensions within a tensor and `:` is the delimiter for tensors in
+            the order `src`, `weights`, and `dst` respectively. The stride for
+            either of the tensors can be skipped and moreover if a separate tag
+            is not provided for the skipped tensor, trivial strides based on the
+            default format of the skipped tensor will be used. As long as
+            `--strides` and `--*tag` options refer to different tensors, they
+            can be specified together.
+ - `--attr-scales=STRING` -- scale primitive attribute. No scale is
+            set by default. Refer to [attributes](knobs_attr.md) for details.
+ - `--attr-zero-points=STRING` -- zero points primitive attribute. No zero
+            points are set by default. Refer to [attributes](knobs_attr.md)
             for details.
+ - `--attr-post-ops=STRING` -- post operation primitive attribute. No post
+            operations are set by default. Refer to [attributes](knobs_attr.md)
+            for details.
+ - `--attr-fpmath=STRING` -- fpmath mode primitive attribute. `strict` math mode
+            is set by default. Refer to [attributes](knobs_attr.md) for details.
  - `--bia_dt={undef [default], f32, s32, s8, u8}` -- bias data type.
             To run MatMul without bias, use `undef` data type (default).
             Refer to [data types](knobs_dt.md) for details.
@@ -41,7 +58,6 @@ where *matmul-knobs* are:
             `REGEX`. By default no pattern is applied (run everything).
             Note: Windows may interpret only string arguments surrounded by
             double quotation marks.
- - Any attributes options. Refer to [attributes](knobs_attr.md) for details.
 
 and *matmul-desc* is a problem descriptor. The canonical form is:
 ```

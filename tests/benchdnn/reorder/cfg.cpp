@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2024 Intel Corporation
+* Copyright 2018-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -39,15 +39,12 @@ REG(f16, -f16_max_exact, f16_max_exact);
 REG(bf16, -int_max_exact, int_max_exact);
 REG(f8_e5m2, -f16_max_exact, f16_max_exact);
 REG(f8_e4m3, -f16_max_exact, f16_max_exact);
-REG(f4_e2m1, -f16_max_exact, f16_max_exact);
 // Do not exceed max float value representable in integer. Otherwise, we get
 // a correctness issue caused by different computations in reference and the
 // library.
 REG(s32, INT_MIN, BENCHDNN_S32_TO_F32_SAT_CONST);
 REG(s8, INT8_MIN, INT8_MAX);
 REG(u8, 0, UINT8_MAX);
-REG(s4, -7, 8);
-REG(u4, 0, 15);
 
 #undef REG
 
@@ -60,12 +57,9 @@ dt_conf_t dt2cfg(dnnl_data_type_t dt) {
     CASE(bf16);
     CASE(f8_e5m2);
     CASE(f8_e4m3);
-    CASE(f4_e2m1);
     CASE(s32);
     CASE(s8);
     CASE(u8);
-    CASE(s4);
-    CASE(u4);
 #undef CASE
     SAFE_V(FAIL);
     return conf_f32;
@@ -80,12 +74,9 @@ dnnl_data_type_t cfg2dt(dt_conf_t cfg) {
     CASE(bf16);
     CASE(f8_e5m2);
     CASE(f8_e4m3);
-    CASE(f4_e2m1);
     CASE(s32);
     CASE(s8);
     CASE(u8);
-    CASE(s4);
-    CASE(u4);
 #undef CASE
     SAFE_V(FAIL);
     return dnnl_f32;

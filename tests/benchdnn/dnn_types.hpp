@@ -41,11 +41,27 @@ extern const char *any;
 extern const char *undef;
 } // namespace tag
 
+enum dir_t {
+    DIR_UNDEF = 0,
+    FLAG_DAT = 1,
+    FLAG_WEI = 2,
+    FLAG_BIA = 4,
+    FLAG_FWD = 32,
+    FLAG_BWD = 64,
+    FLAG_INF = 128,
+    FWD_D = FLAG_FWD + FLAG_DAT,
+    FWD_I = FLAG_FWD + FLAG_DAT + FLAG_INF,
+    FWD_B = FLAG_FWD + FLAG_DAT + FLAG_BIA,
+    BWD_D = FLAG_BWD + FLAG_DAT,
+    BWD_DW = FLAG_BWD + FLAG_DAT + FLAG_WEI,
+    BWD_W = FLAG_BWD + FLAG_WEI,
+    BWD_WB = FLAG_BWD + FLAG_WEI + FLAG_BIA,
+};
+dir_t str2dir(const char *str);
+
 /* TODO: merge prop and dir_t (in favor of prop) */
 const char *prop2str(dnnl_prop_kind_t prop);
 dnnl_prop_kind_t prop2prop_kind(dir_t dir);
-int str2arg(const std::string &str);
-std::string arg2str(int arg);
 
 std::ostream &operator<<(std::ostream &s, dir_t dir);
 std::ostream &operator<<(std::ostream &s, dnnl_data_type_t dt);
@@ -79,7 +95,7 @@ struct attr_t {
     static int get_default_mask(policy_t policy);
     static int policy2mask(int arg, policy_t policy,
             dnnl_primitive_kind_t prim_kind = dnnl_undefined_primitive,
-            int ndims = -1, bool has_groups = false);
+            const_dnnl_memory_desc_t wei_md = nullptr, bool has_groups = false);
 
     struct zero_points_t {
         struct entry_t {
@@ -87,8 +103,6 @@ struct attr_t {
                     dnnl_data_type_t adt = dnnl_s32,
                     const std::vector<dnnl_dim_t> &agroups = {})
                 : policy(apolicy), value(avalue), dt(adt), groups(agroups) {}
-
-            int from_str(const std::string &s);
 
             bool is_def() const {
                 return policy == COMMON && value == 0 && dt == dnnl_s32
@@ -135,10 +149,11 @@ struct attr_t {
 
         int get_mask(int arg,
                 dnnl_primitive_kind_t prim_kind = dnnl_undefined_primitive,
-                int ndims = -1, bool has_groups = false) const {
+                const_dnnl_memory_desc_t wei_md = nullptr,
+                bool has_groups = false) const {
             const auto &e = get(arg);
             return attr_t::policy2mask(
-                    arg, e.policy, prim_kind, ndims, has_groups);
+                    arg, e.policy, prim_kind, wei_md, has_groups);
         }
 
         zero_points_t() : points() {} // needed for debug icc190 build;
@@ -174,10 +189,11 @@ struct attr_t {
 
         int get_mask(int arg,
                 dnnl_primitive_kind_t prim_kind = dnnl_undefined_primitive,
-                int ndims = -1, bool has_groups = false) const {
+                const_dnnl_memory_desc_t wei_md = nullptr,
+                bool has_groups = false) const {
             const auto &e = get(arg);
             return attr_t::policy2mask(
-                    arg, e.policy, prim_kind, ndims, has_groups);
+                    arg, e.policy, prim_kind, wei_md, has_groups);
         }
 
         bool is_def(int arg) const {
@@ -197,31 +213,6 @@ struct attr_t {
         arg_scales_t() : scales() {} // needed for debug icc190 build;
 
         std::map<int, entry_t> scales;
-    };
-
-    struct rounding_mode_t {
-        dnnl_rounding_mode_t get(int arg) const {
-            const auto &r = rounding_modes_.find(arg);
-            return r == rounding_modes_.end() ? dnnl_rounding_mode_environment
-                                              : r->second;
-        }
-        void set(int arg, dnnl_rounding_mode_t rm) {
-            rounding_modes_[arg] = rm;
-        }
-        void set_seed(uint32_t s) {
-            if (is_set_seed && seed != s)
-                BENCHDNN_PRINT(0, "%s\n",
-                        "WARN: rounding seed has to be the same for all "
-                        "arguments");
-            is_set_seed = true;
-            seed = s;
-        }
-        bool is_def() const { return rounding_modes_.empty(); }
-
-        std::map<int, dnnl_rounding_mode_t> rounding_modes_;
-        // Setting seed to all ones for better entropy
-        uint32_t seed = -1;
-        bool is_set_seed = false;
     };
 
     struct post_ops_t {
@@ -349,15 +340,7 @@ struct attr_t {
         int binary_index() const;
         int prelu_index() const;
 
-        // ndims must be provided for primitives that have po mask that depends
-        // on the ndims. Currently this includes only lnorm with binary post-op
-        // with policy PER_OC.
-        // Some primitives might have a special handling for a policy provided.
-        // For such primitives prim_kind must be set so get_po_masks generates
-        // a correct mask. Currently this behavior depends on policy2mask().
-        std::vector<std::pair<int, int>> get_po_masks(int ndims = -1,
-                dnnl_primitive_kind_t prim_kind
-                = dnnl_undefined_primitive) const;
+        std::vector<std::pair<int, int>> get_po_masks() const;
 
         std::vector<entry_t> entry;
     };
@@ -392,13 +375,6 @@ struct attr_t {
         bool apply_to_int = false;
     };
 
-    struct dropout_t {
-        float p = 0.f;
-        uint32_t seed = 0;
-        std::string tag = tag::any;
-        bool is_def() const { return p == 0.f; }
-    };
-
     attr_t()
         : scratchpad_mode(get_default_scratchpad_mode())
         , acc_mode(dnnl_accumulation_mode_strict) {}
@@ -416,8 +392,6 @@ struct attr_t {
     void insert(const fpmath_mode_t &fpm) { this->fpmath_mode = fpm; }
     void insert(dnnl_accumulation_mode_t am) { this->acc_mode = am; }
     void insert(const deterministic_t &d) { this->deterministic = d; }
-    void insert(const dropout_t &d) { this->dropout = d; }
-    void insert(const rounding_mode_t &rm) { this->rounding_mode = rm; }
 
     // When parallel creation modifier is enabled, the library scratchpad mode
     // can't be used unless "-DDNNL_ENABLE_CONCURRENT_EXEC=ON" is enabled at the
@@ -437,8 +411,6 @@ struct attr_t {
     fpmath_mode_t fpmath_mode;
     dnnl_accumulation_mode_t acc_mode;
     deterministic_t deterministic;
-    dropout_t dropout;
-    rounding_mode_t rounding_mode;
 
     bool is_def(bool skip_fpmath = false) const;
 };
@@ -553,8 +525,6 @@ std::ostream &operator<<(std::ostream &s, const attr_t::post_ops_t &post_ops);
 std::ostream &operator<<(std::ostream &s, dnnl_scratchpad_mode_t sm);
 std::ostream &operator<<(std::ostream &s, const attr_t::fpmath_mode_t &fm);
 std::ostream &operator<<(std::ostream &s, dnnl_accumulation_mode_t am);
-std::ostream &operator<<(std::ostream &s, dnnl_rounding_mode_t rm);
-std::ostream &operator<<(std::ostream &s, const attr_t::dropout_t &drop);
 std::ostream &operator<<(std::ostream &s, const attr_t &attr);
 
 // A container for additional data and info, not available from user's input at
@@ -568,16 +538,15 @@ struct attr_args_t {
     attr_args_t() = default;
 
     void prepare_scales(const attr_t &attr, int arg, int mask = -1) {
-        entries.insert(std::make_pair(DNNL_ARG_ATTR_SCALES | arg, mask));
+        entries.insert(std::make_pair(arg, mask));
     };
 
     void prepare_zero_points(const attr_t &attr, int arg, int mask = -1) {
         entries.insert(std::make_pair(DNNL_ARG_ATTR_ZERO_POINTS | arg, mask));
     };
 
-    int prepare_post_ops_mds(const attr_t &attr, int ndims,
-            const dnnl_dims_t prb_dims,
-            dnnl_primitive_kind_t prim_kind = dnnl_undefined_primitive);
+    int prepare_post_ops_mds(
+            const attr_t &attr, int ndims, const dnnl_dims_t prb_dims);
 
     void prepare_dw_post_op(const attr_t &attr, dnnl_data_type_t wei_dt,
             dnnl_data_type_t bia_dt);
@@ -585,7 +554,7 @@ struct attr_args_t {
     // Returns mask set for correspondent `arg`. The default value is `-1`.
     int get_mask(int arg) const {
         const auto it = entries.find(arg);
-        return it == entries.end() ? undefined_mask : it->second;
+        return it == entries.end() ? -1 : it->second;
     }
 
     dnnl_memory_desc_t get_md(int arg) const {
@@ -603,8 +572,6 @@ struct attr_args_t {
             return dnnl_data_type_undef;
         }
     }
-
-    static constexpr int undefined_mask = -1;
 
 private:
     std::map<int, int /* mask*/> entries;
@@ -637,9 +604,6 @@ dnnl_engine_kind_t str2engine_kind(const char *str);
 dnnl_scratchpad_mode_t str2scratchpad_mode(const char *str);
 dnnl_fpmath_mode_t str2fpmath_mode(const char *str);
 dnnl_accumulation_mode_t str2accumulation_mode(const char *str);
-dnnl_rounding_mode_t str2rounding_mode(const std::string &str);
-
-struct dnn_mem_t;
 
 void maybe_scale(const attr_t &attr, float &d, const float *scales, int64_t c,
         int arg, bool opposite_scale = false);
@@ -650,10 +614,6 @@ float compute_eltwise_fwd(
 float compute_eltwise_bwd(attr_t::post_ops_t::kind_t kind, float d_dst,
         float src, float alpha, float beta);
 float compute_binary(attr_t::post_ops_t::kind_t kind, float src0, float src1);
-void maybe_dropout(const attr_t &attr, float &val, int64_t offset,
-        const dnn_mem_t &dropout);
-void maybe_round(const attr_t &attr, int arg, float &val, int64_t offset,
-        dnnl_data_type_t dst_dt);
 void maybe_post_ops(const attr_t &attr, float &val, float sum_val,
         const std::vector<float> &v_po_vals);
 inline void maybe_post_ops(

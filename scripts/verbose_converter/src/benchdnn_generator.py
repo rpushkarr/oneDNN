@@ -45,7 +45,6 @@ def convert_driver(prop_kind):
     driver = {
         "batch_normalization": "bnorm",
         "binary": "binary",
-        "brgemm": "brgemm",
         "concat": "concat",
         "convolution": "conv",
         "deconvolution": "deconv",
@@ -195,10 +194,6 @@ def convert_aux(entry):
                 else ""
             )
             return f"--runtime-dim-mask={runtime_dim_mask}"
-        elif pk == "brgemm":
-            bs = entry["aux"]["bs"] if entry["aux"].get("bs") != None else ""
-            beta = entry["aux"]["beta"] if entry["aux"].get("beta") != None else ""
-            return f"--bs={bs} --beta={beta}"
         else:
             alg = alg_remove_primitive(alg)
             if alg != "":
@@ -341,7 +336,6 @@ def convert_dts(mds, prim_kind):
     convert_dts = {
         "batch_normalization": convert_dts_common,
         "binary": convert_dts_multiple_src,
-        "brgemm": convert_dts_multiple,
         "concat": convert_dts_all,
         "convolution": convert_dts_multiple,
         "deconvolution": convert_dts_multiple,
@@ -488,55 +482,21 @@ def convert_tags(mds, prim_kind):
         weights_md = [md for md in mds if "wei" in md["arg"]][0]
 
         data_tag = data_md["tag"]
-        if "a" in data_md["properties"]:
-            data_tag = "any"
         weights_tag = weights_md["tag"]
-        if "a" in weights_md["properties"]:
-            weights_tag = "any"
 
         return f" --stag={data_tag}:{weights_tag}"
 
     def convert_tags_rnn(mds):
-        tags = "--tag="
-        with_proj = ""
-        with_peep = ""
-        skip_colon = True
-
-        # Tags for backward are driven by diff tensors, query them instead of
-        # forward tensors. Latter will always have `any` format.
-        has_diff_tensors = False
-        for md in mds:
-            if md["arg"].find("diff") != -1:
-                has_diff_tensors = True
-
+        tags = ""
         for md in mds:
             md_arg = md["arg"]
             md_tag = md["tag"]
-            if has_diff_tensors == True:
-                if md_arg in ["diff_src_layer", "diff_wei_layer", "diff_dst_layer"]:
-                    if not skip_colon:
-                        tags += f":"
-                    if "a" in md["properties"]:
-                        tags += f"any"
-                    else:
-                        tags += f"{md_tag}"
-                    skip_colon = False
-            else:
-                if md_arg in ["src_layer", "wei_layer", "dst_layer"]:
-                    if not skip_colon:
-                        tags += f":"
-                    if "a" in md["properties"]:
-                        tags += f"any"
-                    else:
-                        tags += f"{md_tag}"
-                    skip_colon = False
-
             if md_arg == "wei_proj" and md_tag != "undef":
-                with_proj = " --with-projection=true"
+                tags += " --with-projection=true"
             if md_arg == "wei_peephole" and md_tag != "undef":
-                with_peep = " --with-peephole=true"
+                tags += " --with-peephole=true"
 
-        return tags + with_proj + with_peep
+        return tags
 
     def convert_tags_lnorm(mds):
         tag = convert_tags_multiple(mds)
@@ -659,7 +619,6 @@ def convert_scale_policy(value, prim_kind):
             3: "per_ocic",
             4: "per_oc",
             6: "per_ocic",
-            8: "per_oc",
             12: "per_ocic",
         }
     else:
@@ -752,40 +711,39 @@ def convert_post_ops(post_ops, prim_kind):
     return benchdnn_postops
 
 
-def convert_quantization(q_param, prim_kind, def_value, def_type):
+def convert_scales(scales, prim_kind):
     res = []
-    for arg in q_param.keys():
-        p = q_param[arg]
-        policy = convert_scale_policy(p["mask"], prim_kind)
-        benchdnn_p = arg + ":" + policy
+    for arg in scales.keys():
+        s = scales[arg]
+        policy = convert_scale_policy(s["mask"], prim_kind)
+        benchdnn_scale = arg + ":" + policy
         if policy == "common":
-            benchdnn_p += ":" + def_value
-        dt = p["data_type"]
-        groups = p["groups"]
-        if dt != def_type or groups != "":
-            benchdnn_p += ":" + dt
+            benchdnn_scale += ":0.5"
+        dt = s["data_type"]
+        groups = s["groups"]
+        if dt != "f32" or groups != "":
+            benchdnn_scale += ":" + dt
         if groups != "":
-            benchdnn_p += ":" + groups
-        res.append(benchdnn_p)
+            benchdnn_scale += ":" + groups
+        res.append(benchdnn_scale)
     return "+".join(res)
 
 
-def convert_scales(scales, prim_kind):
-    return convert_quantization(
-        q_param=scales, prim_kind=prim_kind, def_value="0.5", def_type="f32"
-    )
-
-
 def convert_zero_points(zero_points, prim_kind):
-    return convert_quantization(
-        q_param=zero_points, prim_kind=prim_kind, def_value="1", def_type="s32"
-    )
-
-
-def convert_rounding_mode(rounding_modes, prim_kind):
     res = []
-    for arg in rounding_modes.keys():
-        res.append(arg + ":" + rounding_modes[arg])
+    for arg in zero_points.keys():
+        zp = zero_points[arg]
+        policy = convert_zp_policy(zp["mask"], prim_kind)
+        benchdnn_zp = arg + ":" + policy
+        if policy == "common":
+            benchdnn_zp += ":1"
+        dt = zp["data_type"]
+        groups = zp["groups"]
+        if dt != "s32" or groups != "":
+            benchdnn_zp += ":" + dt
+        if groups != "":
+            benchdnn_zp += ":" + groups
+        res.append(benchdnn_zp)
     return "+".join(res)
 
 
@@ -801,15 +759,6 @@ def convert_acc_mode(acc_mode, prim_kind):
     return acc_mode
 
 
-def convert_dropout(dropout, prim_kind):
-    # Use default p=0.5 and seed=12345 since those values are user data and
-    # can't be obtained properly.
-    res = "0.5:12345"
-    if dropout["tag"] != None:
-        res += ":" + dropout["tag"]
-    return res
-
-
 def convert_deterministic(deterministic, prim_kind):
     return deterministic
 
@@ -822,8 +771,6 @@ def convert_attrs(exts, prim_kind):
         "attr-scratchpad": convert_scratchpad_mode,
         "attr-fpmath": convert_fpmath_mode,
         "attr-acc": convert_acc_mode,
-        "attr-rounding-mode": convert_rounding_mode,
-        "attr-dropout": convert_dropout,
         "attr-deterministic": convert_deterministic,
     }
 

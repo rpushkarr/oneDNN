@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2024 Intel Corporation
+* Copyright 2021-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -84,12 +84,11 @@ x64::cpu_isa_t brgemm_calc_isa(
     }
 
     if (rnn.is_cell_dt_int8()) {
-        return utils::map(true, x64::isa_undef, mayiuse(avx512_core_vnni),
-                avx512_core, mayiuse(avx512_core), avx512_core);
+        return x64::avx512_core_vnni;
     } else if (rnn.is_cell_dt_bf16()) {
         return x64::avx512_core_bf16;
     } else if (rnn.is_cell_dt_f16()) {
-        return x64::avx512_core_fp16;
+        return isa_undef;
     } else { // f32
         return utils::map(true, x64::isa_undef, mayiuse(avx512_core),
                 avx512_core, mayiuse(avx2), avx2);
@@ -543,7 +542,7 @@ status_t rnn_brgemm_t<prop_kind::forward>::configure_brgemm(
     return status::success;
 }
 
-status_t init_brgemm_kernel(x64::brgemm_desc_t *desc, x64::cpu_isa_t isa,
+status_t init_brgemm_kernel(x64::brgemm_t *desc, x64::cpu_isa_t isa,
         impl::data_type_t src_type, impl::data_type_t weights_type,
         std::unique_ptr<x64::brgemm_kernel_t> &ker, dim_t M, dim_t N, dim_t K,
         dim_t LDA, dim_t LDB, dim_t LDC, float beta, dim_t max_bs,
@@ -564,8 +563,7 @@ status_t init_brgemm_kernel(x64::brgemm_desc_t *desc, x64::cpu_isa_t isa,
     brgattr.max_bs = max_bs;
     brgattr.max_top_vpad = 0;
     brgattr.max_bottom_vpad = 0;
-    brgattr.b_is_vnni = true;
-    CHECK(brgemm_desc_set_attr(desc, brgattr));
+    brgemm_desc_set_attr(desc, brgattr);
 
     x64::brgemm_kernel_t *_t_ptr;
     CHECK(brgemm_kernel_create(&_t_ptr, *desc));
@@ -575,7 +573,7 @@ status_t init_brgemm_kernel(x64::brgemm_desc_t *desc, x64::cpu_isa_t isa,
 };
 
 status_t rnn_brgemm_t<prop_kind::forward>::brgemm_rnn_init_tiles(
-        brgemm_desc_t *desc_array, dim_t size, brgemm_pallete_t pallete) {
+        brgemm_t *desc_array, dim_t size, brgemm_pallete_t pallete) {
 
     for (dim_t it = 0; it < size; ++it) {
         const auto &desc = desc_array[it];
@@ -588,11 +586,11 @@ status_t rnn_brgemm_t<prop_kind::forward>::brgemm_rnn_init_tiles(
 }
 
 status_t rnn_brgemm_t<prop_kind::forward>::brgemm_rnn_init_tiles(
-        brgemm_desc_t *desc_array, brgemm_pallete_t pallete) {
+        brgemm_t *desc_array, brgemm_pallete_t pallete) {
     return brgemm_rnn_init_tiles(desc_array, num_base_kernels_, pallete);
 }
 status_t rnn_brgemm_t<prop_kind::forward>::brgemm_rnn_init_tiles_proj(
-        brgemm_desc_t *desc_array, brgemm_pallete_t pallete) {
+        brgemm_t *desc_array, brgemm_pallete_t pallete) {
     return brgemm_rnn_init_tiles(desc_array, num_proj_kernels_, pallete);
 }
 
@@ -601,7 +599,7 @@ status_t rnn_brgemm_t<prop_kind::forward>::init_kernels(
         data_type_t weights_type) {
 
     const auto init_brgemm
-            = [&](x64::brgemm_desc_t *desc, x64::cpu_isa_t isa,
+            = [&](x64::brgemm_t *desc, x64::cpu_isa_t isa,
                       std::unique_ptr<x64::brgemm_kernel_t> &ker, dim_t M,
                       dim_t N, dim_t K, dim_t LDA, dim_t LDB, dim_t LDC,
                       float beta, dim_t max_bs) {
@@ -1098,7 +1096,7 @@ static status_t init_kernels_diff_src(rnn_diff_src_brgemm_t &diff_src,
         data_type_t weights_type) {
 
     const auto init_brgemm_diff_src
-            = [&](x64::brgemm_desc_t *desc, x64::cpu_isa_t isa,
+            = [&](x64::brgemm_t *desc, x64::cpu_isa_t isa,
                       std::unique_ptr<x64::brgemm_kernel_t> &ker, dim_t M,
                       dim_t N, dim_t K, dim_t LDA, dim_t LDB, dim_t LDC,
                       float beta, dim_t max_bs) {
@@ -1223,7 +1221,7 @@ static status_t init_kernels_diff_wei(rnn_diff_wei_brgemm_t &diff_wei,
         data_type_t weights_type) {
 
     const auto init_brgemm_diff_wei
-            = [&](x64::brgemm_desc_t *desc, x64::cpu_isa_t isa,
+            = [&](x64::brgemm_t *desc, x64::cpu_isa_t isa,
                       std::unique_ptr<x64::brgemm_kernel_t> &ker, dim_t M,
                       dim_t N, dim_t K, dim_t LDA, dim_t LDB, dim_t LDC,
                       float beta, dim_t max_bs) {
@@ -1341,7 +1339,7 @@ static status_t init_kernels_diff_wei(rnn_diff_wei_brgemm_t &diff_wei,
     tmp_matmul_conf_for_reorder.N_tail = diff_wei_conf.n_tail;
     tmp_matmul_conf_for_reorder.LDB = diff_wei_conf.LDB;
     tmp_matmul_conf_for_reorder.src_dt = tmp_matmul_conf_for_reorder.wei_dt
-            = tmp_matmul_conf_for_reorder.orig_wei_dt = rnn.cell_dt;
+            = rnn.cell_dt;
     tmp_matmul_conf_for_reorder.a_dt_sz = tmp_matmul_conf_for_reorder.tr_a_dt_sz
             = types::data_type_size(tmp_matmul_conf_for_reorder.src_dt);
     tmp_matmul_conf_for_reorder.b_dt_sz = tmp_matmul_conf_for_reorder.tr_b_dt_sz
@@ -1350,8 +1348,6 @@ static status_t init_kernels_diff_wei(rnn_diff_wei_brgemm_t &diff_wei,
             = tmp_matmul_conf_for_reorder.N
             * tmp_matmul_conf_for_reorder.b_dt_sz;
     tmp_matmul_conf_for_reorder.transposed_B = false;
-    tmp_matmul_conf_for_reorder.is_bf16_with_int_wei = false;
-    tmp_matmul_conf_for_reorder.with_wei_decompression = false;
     CHECK(matmul::create_brgemm_matmul_copy_b(
             diff_wei.srcatch_gates_reorder_kernel_,
             &tmp_matmul_conf_for_reorder));

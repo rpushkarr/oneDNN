@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2024 Intel Corporation
+* Copyright 2018-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -460,7 +460,8 @@ void _jit_avx512_core_x8s8s32x_1x1_conv_kernel<Vmm>::reduce_loop(
             for (int i_load = 0; i_load < load_loop_blk; ++i_load) {
                 for (int i_ur = 0; i_ur < ur; ++i_ur) {
                     auto r = vreg_accum(load_loop_blk, i_load, i_ur);
-                    saturate_cvt_f32(r, vmm_zero, vmm_saturation, jcp.dst_dt);
+                    saturate_f32(r, vmm_zero, vmm_saturation, jcp.dst_dt);
+                    vcvtps2dq(r, r);
                 }
             }
         }
@@ -817,8 +818,7 @@ void _jit_avx512_core_x8s8s32x_1x1_conv_kernel<Vmm>::generate() {
 
     postamble();
 
-    if (jcp.with_eltwise)
-        postops_injector_->prepare_table(/* generate = */ true);
+    if (jcp.with_eltwise) postops_injector_->prepare_table();
 }
 
 status_t jit_avx512_core_x8s8s32x_1x1_conv_kernel::init_conf(

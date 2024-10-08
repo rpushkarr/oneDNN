@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2024 Intel Corporation
+* Copyright 2022-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ static bool is_ne_xf16_supported(cpu_isa_t isa, const data_type_t dtype) {
 
 binary_kernel_t::binary_kernel_t(const size_t vlen, const binary_pd_t *pd,
         const jit_binary_conf_t conf, const char *name, bool tail_kernel)
-    : jit_generator(name, conf.isa)
+    : jit_generator(name)
     , vlen_(vlen)
     , simd_w_(vlen / sizeof(float))
     , pd_(pd)
@@ -699,7 +699,7 @@ void jit_uni_binary_kernel_t<isa, Vmm>::generate() {
     postamble();
 
     if ((conf_.with_eltwise || conf_.is_i8) && postops_injector_)
-        postops_injector_->prepare_table(/* generate = */ true);
+        postops_injector_->prepare_table();
 }
 
 #undef PARAM_OFF

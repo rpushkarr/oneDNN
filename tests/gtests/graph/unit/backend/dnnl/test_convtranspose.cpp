@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020-2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -943,8 +943,7 @@ TEST(test_convtranspose_operator_kernel, convtranspose_swish) {
     }
 }
 
-TEST(test_convtranspose_execute_subgraph_int8,
-        GroupConvTransposeWeightOC1_CPU) {
+TEST(test_convtranspose_execute_subgraph_int8, GroupConvTransposeWeightOC1) {
     using dims = graph::dnnl_impl::dims;
 
     graph::engine_t *engine = get_engine();
@@ -1079,7 +1078,7 @@ TEST(test_convtranspose_execute_subgraph_int8,
 }
 
 TEST(test_convtranspose_execute_subgraph_int8,
-        GroupConvTransposePerTensorScale_CPU) {
+        GroupConvTransposePerTensorScale) {
 
     using dims = graph::dnnl_impl::dims;
 
@@ -1411,7 +1410,7 @@ TEST(test_convtranspose_execute_subgraph_int8, ConvTranspose1d2d3d) {
     }
 }
 
-TEST(test_convtranspose_execute_subgraph_int8, ConvTranspose2dEltwise_CPU) {
+TEST(test_convtranspose_execute_subgraph_int8, ConvTranspose2dEltwise) {
     using dims = graph::dnnl_impl::dims;
 
     graph::engine_t *engine = get_engine();
@@ -1653,7 +1652,7 @@ TEST(test_convtranspose_execute_subgraph_int8, ConvTranspose2dEltwise_CPU) {
 }
 
 TEST(test_convtranspose_execute_subgraph_int8,
-        X8X8F32ConvTranspose1d2d3dEltwise_CPU) {
+        X8X8F32ConvTranspose1d2d3dEltwise) {
     using dims = graph::dnnl_impl::dims;
 
     graph::engine_t *engine = get_engine();
@@ -2483,7 +2482,7 @@ TEST(test_convtranspose_execute_subgraph_int8, ConvTranspose1d2d3dBinary) {
 }
 
 TEST(test_convtranspose_execute_subgraph_int8,
-        ConvTranspose2dAddGetInplacePair_CPU) {
+        ConvTranspose2dAddGetInplacePair) {
     using dims = graph::dnnl_impl::dims;
 
     graph::engine_t *engine = get_engine();

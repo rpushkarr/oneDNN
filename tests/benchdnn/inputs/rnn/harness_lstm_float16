@@ -1,6 +1,7 @@
 # f16
 --reset
 
+--skip-impl=ref
 --trivial-strides=true,false
 --prop=FWD_I,BWD_DW
 --alg=VANILLA_LSTM

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2024 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -15,32 +15,8 @@
 *******************************************************************************/
 
 #include "graph_memory.hpp"
-#include "allocator.hpp"
-
-#include "oneapi/dnnl/dnnl_graph.hpp"
-
-// 0.75f is taken randomly and is subject to change in future.
-static constexpr float capacity_factor = 0.75f;
 
 namespace graph {
-
-size_t get_benchdnn_cpu_limit() {
-    static size_t cpu_device_capacity = get_cpu_ram_size();
-    const double benchdnn_cpu_limit = capacity_factor * cpu_device_capacity;
-    assert(benchdnn_cpu_limit > 0);
-    return benchdnn_cpu_limit;
-}
-
-size_t get_benchdnn_device_limit() {
-    if (is_cpu()) return 0;
-    static size_t gpu_device_capacity = 0;
-    static size_t gpu_max_alloc_capacity = 0;
-    SAFE(get_gpu_ram_sizes(gpu_device_capacity, gpu_max_alloc_capacity), WARN);
-
-    const double benchdnn_device_limit = capacity_factor * gpu_device_capacity;
-    assert(benchdnn_device_limit > 0);
-    return benchdnn_device_limit;
-}
 
 dnn_graph_mem_t::dnn_graph_mem_t(const dnn_mem_t &mem,
         const deserialized_lt &lt, const bool is_op_input,
@@ -63,8 +39,6 @@ dnn_graph_mem_t::dnn_graph_mem_t(const dnn_mem_t &mem,
     graph_dims_ = lt.shape_;
     graph_strides_ = lt.stride_;
 
-    const auto &g_eng = get_graph_engine().operator const dnnl::engine &();
-
     // We create memory for graph path in two steps:
     // 1. Create memory objects.
     // 2. Do memory copy if needed.
@@ -84,7 +58,7 @@ dnn_graph_mem_t::dnn_graph_mem_t(const dnn_mem_t &mem,
 
         // create graph memory
         dnnl::memory::desc md(graph_dims_, data_type, graph_strides_);
-        mem_ = dnn_mem_t(md.get(), g_eng.get());
+        mem_ = dnn_mem_t(md.get(), ::get_test_engine());
 
         const auto prim_to_graph_memcpy = [](dnn_mem_t &graph_mem,
                                                   const dnn_mem_t &prim_mem) {
@@ -95,7 +69,8 @@ dnn_graph_mem_t::dnn_graph_mem_t(const dnn_mem_t &mem,
 
         // Not do reorder for boolean data tensor
         if (!is_boolean && prim_dt != c_data_type) {
-            dnn_mem_t c_mem(ndims, mem.dims(), c_data_type, mtag, g_eng.get());
+            dnn_mem_t c_mem(
+                    ndims, mem.dims(), c_data_type, mtag, ::get_test_engine());
             SAFE_V(c_mem.reorder(mem));
             prim_to_graph_memcpy(mem_, c_mem);
         } else {
@@ -104,9 +79,9 @@ dnn_graph_mem_t::dnn_graph_mem_t(const dnn_mem_t &mem,
     } else {
         if (is_fake_output) {
             dnnl::memory::desc md(graph_dims_, data_type, graph_strides_);
-            mem_ = dnn_mem_t(md.get(), g_eng.get());
+            mem_ = dnn_mem_t(md.get(), ::get_test_engine());
         } else {
-            mem_ = dnn_mem_t(mem.md_, c_data_type, mtag, g_eng.get());
+            mem_ = dnn_mem_t(mem.md_, c_data_type, mtag, ::get_test_engine());
         }
     }
 }
@@ -120,31 +95,6 @@ dnnl::graph::tensor dnn_graph_mem_t::make_graph_tensor(
     dnnl::graph::tensor ret(graph_lt, get_graph_engine(), data_handle);
 
     return ret;
-}
-
-void flush_temp_memory() {
-    using namespace dnnl::graph;
-    // flush the constant tensor cache.
-    const auto kind = engine_tgt_kind == dnnl_cpu ? engine::kind::cpu
-                                                  : engine::kind::gpu;
-    static size_t ct_capacity = get_constant_tensor_cache_capacity(kind);
-    if (ct_capacity > 0) set_constant_tensor_cache_capacity(kind, ct_capacity);
-
-        // flush the compiled partition cache.
-#ifndef DNNL_GRAPH_DISABLE_COMPILED_PARTITION_CACHE
-    static int cp_capacity = get_compiled_partition_cache_capacity();
-    set_compiled_partition_cache_capacity(0); // clear the cache
-    set_compiled_partition_cache_capacity(
-            cp_capacity); // reset the cache capacity.
-#endif
-
-#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL \
-        || DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
-    if (!has_bench_mode_bit(mode_bit_t::corr) && is_gpu()) {
-        auto &graph_mem_mgr = graph_mem_manager_t::get_instance();
-        graph_mem_mgr.clear_memory_pool();
-    }
-#endif
 }
 
 } // namespace graph
